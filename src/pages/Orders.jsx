@@ -308,22 +308,17 @@ export default function Orders() {
   // linked Bill for editing directly from the Orders tab, instead of
   // having to separately find it in Bill Entries.
   const openModify = (o) => {
-    if (!o.bill_id) return toast({ variant: "destructive", title: "No invoice yet", description: "Dispatch this order first to create its invoice." });
-    const bill = bills.find((b) => b.id === o.bill_id);
-    if (!bill) return toast({ variant: "destructive", title: "Invoice not found" });
-    const customer = customersById[bill.customer_id];
-    // Full product grid, pre-filled with this bill's existing quantities/rate
-    // for matching items — same merge pattern used when creating a new order.
-    // Any product not already on the bill defaults to the customer's price
-    // (not 0), in case they add a new item while modifying.
-    const merged = buildItemsFromProductList(productList).map((p) => {
-      const existing = (bill.items || []).find((x) => x.category === p.category && x.flavour === p.flavour);
-      return existing ? { ...p, ...existing } : { ...p, rate: getProductPrice(customer, p.category, p.flavour) };
-    });
-    setModifyBill(bill);
-    setModifyItems(merged);
-    setModifyOpen(true);
-  };
+  const bill = bills.find((b) => b.id === o.bill_id) || bills.find((b) => b.invoice_number === o.invoice_number);
+  if (!bill) return toast({ variant: "destructive", title: "No invoice yet", description: "Dispatch this order first to create its invoice." });
+  const customer = customersById[bill.customer_id];
+  const merged = buildItemsFromProductList(productList).map((p) => {
+    const existing = (bill.items || []).find((x) => x.category === p.category && x.flavour === p.flavour);
+    return existing ? { ...p, ...existing } : { ...p, rate: getProductPrice(customer, p.category, p.flavour) };
+  });
+  setModifyBill(bill);
+  setModifyItems(merged);
+  setModifyOpen(true);
+};
 
   const updateModifyItem = (idx, field, value) => {
     setModifyItems((prev) => prev.map((it, i) => (i === idx ? { ...it, [field]: value } : it)));
@@ -513,9 +508,9 @@ export default function Orders() {
                 <Button disabled={busy} variant={selected.dispatch_status === "dispatched" ? "default" : "outline"} onClick={() => dispatch(selected)}>
                   <Truck className="h-4 w-4 mr-2" /> {selected.dispatch_status === "dispatched" ? "Unmark Dispatch" : "Mark Dispatched"}
                 </Button>
-                {selected.bill_id && (
-                  <Button variant="outline" onClick={() => openModify(selected)}>
-                    <Pencil className="h-4 w-4 mr-2" /> Modify
+                {(selected.bill_id || selected.dispatch_status === "dispatched") && (
+                <Button variant="outline" onClick={() => openModify(selected)}>
+                <Pencil className="h-4 w-4 mr-2" /> Modify
                   </Button>
                 )}
               </div>
