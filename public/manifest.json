@@ -1,0 +1,18 @@
+{
+  "name": "SVB — Beverage Distribution",
+  "short_name": "SVB",
+  "description": "Saaki Vriksh Beverages — beverage distribution & inventory management.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1CA64F",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
