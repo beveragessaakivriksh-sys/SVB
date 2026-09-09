@@ -102,7 +102,7 @@ export default function ThermalPreview({ bill, customer, onPrintError, stockCont
         <div className="flex justify-between"><span>Closing Stock (Hotel)</span><span>{c.closingStock.crates} cr + {c.closingStock.loose} lo</span></div>
         <div className="my-1 border-t border-dashed border-primary/30" />
         <div className="text-[10px] leading-snug">{THERMAL_LIABILITY}</div>
-        <div className="mt-2 text-center font-bold text-primary">Thank you! Visit again.</div>
+        <div className="mt-2 text-center font-bold text-primary">Thank you!.</div>
         <div className="mt-12 border-t border-dashed border-primary/30 pt-1 text-center text-[10px] text-muted-foreground">Seal &amp; Signature</div>
       </div>
 
