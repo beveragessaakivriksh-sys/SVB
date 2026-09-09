@@ -161,6 +161,7 @@ export function thermalContent(bill, customer, ctx = {}) {
     hotel: bill.customer_name || customer?.customer_name || "",
     invoiceNumber: bill.invoice_number || "",
     date: bill.invoice_date || "",
+    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     paymentStatus: bill.payment_status || "pending",
     items: items.map((it) => ({
       name: it.label || `${it.category} - ${it.flavour}`,

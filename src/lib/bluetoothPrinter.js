@@ -46,7 +46,7 @@ function buildReceipt(bill, customer, { duplicate = false } = {}, ctx = {}) {
   s += L;
   s += padL("Hotel:", 7) + c.hotel.slice(0, W - 7) + "\n";
   s += padL("Invoice #:", 11) + c.invoiceNumber + "\n";
-  s += padL("Date:", 7) + c.date + "\n";
+  s += padL("Date:", 7) + c.date + " " + c.time + "\n";
   s += padL("Payment:", 9) + c.paymentStatus + (bill.payment_mode ? " / " + bill.payment_mode : "") + "\n";
   if (bill.has_gst && (bill.gstin || customer?.gstin)) s += padL("GSTIN:", 7) + (bill.gstin || customer.gstin) + "\n";
   s += L;
@@ -74,7 +74,7 @@ function buildReceipt(bill, customer, { duplicate = false } = {}, ctx = {}) {
   s += L;
   s += wrap(THERMAL_LIABILITY, W) + "\n";
   s += L;
-  s += center("Thank you! Visit again.", W) + "\n";
+ s += center("Thank you!", W) + "\n";
   if (duplicate) { s += "\n\n\n\n" + center("Seal & Signature", W) + "\n\n"; }
   s += "\n\n";
   s += "\x1Dh\x50";
