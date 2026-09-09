@@ -125,9 +125,24 @@ export async function sendRawDataToPrinter(data, connectionType) {
     }
   } else {
     if (!bleChar) throw new Error("Bluetooth printer not connected");
-    const chunk = 180;
+    // Small, universally-safe chunk size + a short pause between writes.
+    // Some Android BLE stacks (older Android versions, certain OEM skins
+    // like Funtouch OS) don't reliably negotiate a larger ATT MTU from a
+    // web page, and/or drop bytes when writes arrive faster than the
+    // printer's receive buffer drains — both show up as garbled or
+    // incomplete thermal prints, even though the exact same data prints
+    // fine on another phone/desktop with a more forgiving BLE stack.
+    const chunk = 20;
+    const canWriteWithoutResponse =
+      typeof bleChar.writeValueWithoutResponse === "function" && bleChar.properties?.writeWithoutResponse;
     for (let i = 0; i < data.length; i += chunk) {
-      await bleChar.writeValue(data.slice(i, i + chunk));
+      const part = data.slice(i, i + chunk);
+      if (canWriteWithoutResponse) {
+        await bleChar.writeValueWithoutResponse(part);
+      } else {
+        await bleChar.writeValue(part);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
   }
 }
