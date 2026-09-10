@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 
 import PageShell from "@/components/PageShell";
 import { priceKey } from "@/lib/constants";
-import { customerClosingStock } from "@/lib/billUtils";
+import { customerClosingStock, sortCustomersAlpha } from "@/lib/billUtils";
 import { useProducts } from "@/lib/useProducts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, FileDown } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
 const EMPTY = {
@@ -31,7 +31,7 @@ export default function Customers() {
   const [editing, setEditing] = useState(null);
 
   const load = async () => {
-    setCustomers(await db.entities.Customer.list());
+    setCustomers(sortCustomersAlpha(await db.entities.Customer.list()));
     setBills(await db.entities.Bill.list("-invoice_date", 500));
     setCrateEntries(await db.entities.CrateEntry.list("-entry_date", 500));
   };

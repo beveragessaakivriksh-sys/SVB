@@ -78,6 +78,12 @@ export function bottlesToCrateLoose(bottles, size = BOTTLES_PER_CRATE) {
   return { crates: Math.floor(b / size), loose: b % size };
 }
 
+export function sortCustomersAlpha(customers = []) {
+  return [...customers].sort((a, b) =>
+    (a.display_name || a.customer_name || "").localeCompare(b.display_name || b.customer_name || "", undefined, { sensitivity: "base" })
+  );
+}
+
 export function customerClosingStock(customer, bills = [], crateEntries = []) {
   const cid = customer?.id;
   const startCrates = Number(customer?.closing_stock_crates) || 0;

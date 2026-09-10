@@ -6,7 +6,7 @@ import PageShell from "@/components/PageShell";
 import { Stepper } from "@/components/Stepper";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
-import { buildItemsFromProductList, computeBillTotals, getProductPrice, itemBottles, itemAmount } from "@/lib/billUtils";
+import { buildItemsFromProductList, computeBillTotals, getProductPrice, itemBottles, itemAmount, sortCustomersAlpha } from "@/lib/billUtils";
 import { nextInvoiceNumber } from "@/lib/invoiceSeries";
 import { useProducts } from "@/lib/useProducts";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ export default function NewDelivery() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    db.entities.Customer.list().then(setCustomers);
+    db.entities.Customer.list().then((list) => setCustomers(sortCustomersAlpha(list)));
   }, []);
 
   // Keep the item matrix in sync with managed products (Settings), preserving
