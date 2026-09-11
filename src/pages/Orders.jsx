@@ -118,6 +118,26 @@ export default function Orders() {
     return out;
   }, [groupedSummary, categories]);
 
+  // Sum across all flavours for one hotel within a category — e.g. a
+  // hotel ordering 2 crates Jeera + 1 crate Ginger shows "3" crates total.
+  const hotelRowTotal = (h) => {
+    let crates = 0, loose = 0;
+    Object.values(h.products || {}).forEach((p) => {
+      crates += Number(p.crates) || 0;
+      loose += Number(p.loose) || 0;
+    });
+    return { crates, loose };
+  };
+
+  // Grand total for a whole category (Goli Fizz / Goli Blast / Petbottle) —
+  // sum of every flavour's total within that category, across all hotels.
+  const categoryGrandTotal = (cat) => {
+    return Object.values(flavourTotals[cat] || {}).reduce(
+      (acc, t) => ({ crates: acc.crates + t.crates, loose: acc.loose + t.loose }),
+      { crates: 0, loose: 0 }
+    );
+  };
+
   const saveSummaryPdf = async () => {
     if (summaryOrders.length === 0) return toast({ variant: "destructive", title: "Select orders to summarize" });
     try {
@@ -144,48 +164,65 @@ export default function Orders() {
       });
       y += 4;
 
-      // Per-category tables: Crates (Cr) and Loose (Lo) per flavour
+      // Per-category tables: Crates (Cr) and Loose (Lo) per flavour, plus a
+      // Total column per hotel and an overall category grand total.
       categories.forEach((cat) => {
         const hotels = Object.entries(groupedSummary[cat] || {});
         if (hotels.length === 0) return;
         const flavs = flavoursByCategory(cat);
+        const totalX = 90 + flavs.length * 14;
         if (y > 270) { pdf.addPage(); y = 20; }
         pdf.setFont("helvetica", "bold");
         pdf.text(cat, 14, y); y += 5;
         pdf.setFont("helvetica", "normal");
-        pdf.text("Hotel", 14, y); pdf.text("MRP", 58, y);
-        flavs.forEach((fl, i) => pdf.text(String(fl).slice(0, 6), 78 + i * 14, y));
+        pdf.setFontSize(7);
+        pdf.text("Hotel", 14, y);
+        pdf.setFontSize(9);
+        pdf.text("MRP", 70, y);
+        flavs.forEach((fl, i) => pdf.text(String(fl).slice(0, 6), 90 + i * 14, y));
+        pdf.text("Total", totalX, y);
         y += 4;
         flavs.forEach((fl, i) => {
-          const x = 78 + i * 14;
+          const x = 90 + i * 14;
           pdf.text("Cr", x, y); pdf.text("Lo", x + 7, y);
         });
-        y += 2; pdf.line(14, y, 196, y); y += 3;
+        pdf.text("Cr", totalX, y); pdf.text("Lo", totalX + 7, y);
+        y += 2; pdf.line(14, y, totalX + 12, y); y += 3;
         hotels.forEach(([hotel, h]) => {
           if (y > 285) { pdf.addPage(); y = 20; }
-          pdf.text(String(hotel).slice(0, 16), 14, y);
-          pdf.text(`Rs. ${Number(h.mrp || 0).toFixed(0)}`, 58, y);
+          pdf.setFontSize(7);
+          pdf.text(String(hotel), 14, y);
+          pdf.setFontSize(9);
+          pdf.text(`Rs. ${Number(h.mrp || 0).toFixed(0)}`, 70, y);
           flavs.forEach((fl, i) => {
-            const x = 78 + i * 14;
+            const x = 90 + i * 14;
             const p = h.products[fl];
             pdf.text(p ? String(Number(p.crates) || 0) : "-", x, y);
             pdf.text(p ? String(Number(p.loose) || 0) : "-", x + 7, y);
           });
+          const rt = hotelRowTotal(h);
+          pdf.setFont("helvetica", "bold");
+          pdf.text(String(rt.crates), totalX, y);
+          pdf.text(String(rt.loose), totalX + 7, y);
+          pdf.setFont("helvetica", "normal");
           y += 5;
         });
-        // totals row (crates / loose per flavour)
+        // totals row (crates / loose per flavour + overall category grand total)
         if (y > 285) { pdf.addPage(); y = 20; }
         pdf.setFont("helvetica", "bold");
         pdf.text("Total Cr/Lo", 14, y);
         flavs.forEach((fl, i) => {
-          const x = 78 + i * 14;
+          const x = 90 + i * 14;
           const t = flavourTotals[cat]?.[fl] || { crates: 0, loose: 0 };
           pdf.text(String(t.crates), x, y);
           pdf.text(String(t.loose), x + 7, y);
         });
+        const gt = categoryGrandTotal(cat);
+        pdf.text(String(gt.crates), totalX, y);
+        pdf.text(String(gt.loose), totalX + 7, y);
         pdf.setFont("helvetica", "normal");
         y += 6;
-        pdf.line(14, y, 196, y); y += 5;
+        pdf.line(14, y, totalX + 12, y); y += 5;
       });
 
       pdf.save(`orders_summary_${todayISO()}.pdf`);
@@ -308,17 +345,17 @@ export default function Orders() {
   // linked Bill for editing directly from the Orders tab, instead of
   // having to separately find it in Bill Entries.
   const openModify = (o) => {
-  const bill = bills.find((b) => b.id === o.bill_id) || bills.find((b) => b.invoice_number === o.invoice_number);
-  if (!bill) return toast({ variant: "destructive", title: "No invoice yet", description: "Dispatch this order first to create its invoice." });
-  const customer = customersById[bill.customer_id];
-  const merged = buildItemsFromProductList(productList).map((p) => {
-    const existing = (bill.items || []).find((x) => x.category === p.category && x.flavour === p.flavour);
-    return existing ? { ...p, ...existing } : { ...p, rate: getProductPrice(customer, p.category, p.flavour) };
-  });
-  setModifyBill(bill);
-  setModifyItems(merged);
-  setModifyOpen(true);
-};
+    const bill = bills.find((b) => b.id === o.bill_id) || bills.find((b) => b.invoice_number === o.invoice_number);
+    if (!bill) return toast({ variant: "destructive", title: "No invoice yet", description: "Dispatch this order first to create its invoice." });
+    const customer = customersById[bill.customer_id];
+    const merged = buildItemsFromProductList(productList).map((p) => {
+      const existing = (bill.items || []).find((x) => x.category === p.category && x.flavour === p.flavour);
+      return existing ? { ...p, ...existing } : { ...p, rate: getProductPrice(customer, p.category, p.flavour) };
+    });
+    setModifyBill(bill);
+    setModifyItems(merged);
+    setModifyOpen(true);
+  };
 
   const updateModifyItem = (idx, field, value) => {
     setModifyItems((prev) => prev.map((it, i) => (i === idx ? { ...it, [field]: value } : it)));
@@ -509,8 +546,8 @@ export default function Orders() {
                   <Truck className="h-4 w-4 mr-2" /> {selected.dispatch_status === "dispatched" ? "Unmark Dispatch" : "Mark Dispatched"}
                 </Button>
                 {(selected.bill_id || selected.dispatch_status === "dispatched") && (
-                <Button variant="outline" onClick={() => openModify(selected)}>
-                <Pencil className="h-4 w-4 mr-2" /> Modify
+                  <Button variant="outline" onClick={() => openModify(selected)}>
+                    <Pencil className="h-4 w-4 mr-2" /> Modify
                   </Button>
                 )}
               </div>
@@ -628,30 +665,38 @@ export default function Orders() {
                           <th rowSpan={2} className="p-2 text-left">Hotel</th>
                           <th rowSpan={2} className="p-2 text-right">MRP</th>
                           {flavs.map((fl) => <th key={fl} colSpan={2} className="p-2 text-center">{fl}</th>)}
+                          <th colSpan={2} className="p-2 text-center font-bold text-primary">Total</th>
                         </tr>
                         <tr>
                           {flavs.flatMap((fl) => [
                             <th key={`${fl}-cr`} className="p-1 text-center font-normal">Crates</th>,
                             <th key={`${fl}-lo`} className="p-1 text-center font-normal">Loose</th>,
                           ])}
+                          <th className="p-1 text-center font-normal text-primary">Crates</th>
+                          <th className="p-1 text-center font-normal text-primary">Loose</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {hotels.map(([hotel, h]) => (
-                          <tr key={hotel} className="border-t border-primary/10">
-                            <td className="p-2">{hotel}</td>
-                            <td className="p-2 text-right">₹ {Number(h.mrp || 0).toFixed(0)}</td>
-                            {flavs.flatMap((fl) => {
-                              const p = h.products[fl];
-                              const cr = p ? Number(p.crates) || 0 : 0;
-                              const lo = p ? Number(p.loose) || 0 : 0;
-                              return [
-                                <td key={`${fl}-cr`} className={`p-2 text-center ${cr ? "" : "text-muted-foreground"}`}>{cr || "—"}</td>,
-                                <td key={`${fl}-lo`} className={`p-2 text-center ${lo ? "" : "text-muted-foreground"}`}>{lo || "—"}</td>,
-                              ];
-                            })}
-                          </tr>
-                        ))}
+                        {hotels.map(([hotel, h]) => {
+                          const rt = hotelRowTotal(h);
+                          return (
+                            <tr key={hotel} className="border-t border-primary/10">
+                              <td className="p-2">{hotel}</td>
+                              <td className="p-2 text-right">₹ {Number(h.mrp || 0).toFixed(0)}</td>
+                              {flavs.flatMap((fl) => {
+                                const p = h.products[fl];
+                                const cr = p ? Number(p.crates) || 0 : 0;
+                                const lo = p ? Number(p.loose) || 0 : 0;
+                                return [
+                                  <td key={`${fl}-cr`} className={`p-2 text-center ${cr ? "" : "text-muted-foreground"}`}>{cr || "—"}</td>,
+                                  <td key={`${fl}-lo`} className={`p-2 text-center ${lo ? "" : "text-muted-foreground"}`}>{lo || "—"}</td>,
+                                ];
+                              })}
+                              <td className="p-2 text-center font-semibold text-primary">{rt.crates || "—"}</td>
+                              <td className="p-2 text-center font-semibold text-primary">{rt.loose || "—"}</td>
+                            </tr>
+                          );
+                        })}
                         <tr className="border-t-2 border-primary/30 bg-primary/5 font-semibold">
                           <td className="p-2" colSpan={2}>Total (crates / loose)</td>
                           {flavs.flatMap((fl) => {
@@ -661,6 +706,15 @@ export default function Orders() {
                               <td key={`${fl}-lo`} className="p-2 text-center text-primary">{t.loose}</td>,
                             ];
                           })}
+                          {(() => {
+                            const gt = categoryGrandTotal(cat);
+                            return (
+                              <>
+                                <td className="p-2 text-center text-primary">{gt.crates}</td>
+                                <td className="p-2 text-center text-primary">{gt.loose}</td>
+                              </>
+                            );
+                          })()}
                         </tr>
                       </tbody>
                     </table>
