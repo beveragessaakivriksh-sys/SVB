@@ -148,8 +148,7 @@ export default function Orders() {
       pdf.setFontSize(9);
       let y = 24;
 
-
-            // Per-category tables: Crates (Cr) and Loose (Lo) per flavour, plus a
+      // Per-category tables: Crates (Cr) and Loose (Lo) per flavour, plus a
       // Total column per hotel and an overall category grand total.
       // Gridlines: bold black header rule + outer border, thin light-gray
       // rules between hotels, and a bold rule separating hotels from the
@@ -255,42 +254,12 @@ export default function Orders() {
         y += 6;
       });
 
-        // totals row (crates / loose per flavour + overall category grand total)
-        if (y > 285) {
-          colXs.forEach((x) => pdf.line(x, sectionTop, x, y - 1));
-          pdf.addPage();
-          y = 20;
-          sectionTop = y - 2;
-        }
-        pdf.setFont("helvetica", "bold");
-        pdf.text("Total Cr/Lo", 14, y);
-        flavs.forEach((fl, i) => {
-          const x = 90 + i * 14;
-          const t = flavourTotals[cat]?.[fl] || { crates: 0, loose: 0 };
-          pdf.text(String(t.crates), x, y);
-          pdf.text(String(t.loose), x + 7, y);
-        });
-        const gt = categoryGrandTotal(cat);
-        pdf.text(String(gt.crates), totalX, y);
-        pdf.text(String(gt.loose), totalX + 7, y);
-        pdf.setFont("helvetica", "normal");
-        y += 3;
-        pdf.line(14, y, rightEdge, y);
-        y += 2;
-
-        // vertical column dividers for this table (or its last page segment)
-        colXs.forEach((x) => pdf.line(x, sectionTop, x, y));
-
-        y += 6;
-      });
-
       pdf.save(`orders_summary_${todayISO()}.pdf`);
       toast({ title: "Summary saved as PDF" });
     } catch (e) {
       toast({ variant: "destructive", title: "Could not save PDF", description: e.message });
     }
   };
-
   const dispatch = async (o) => {
     if (o.dispatch_status === "dispatched") {
       // unmark
