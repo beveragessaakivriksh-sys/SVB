@@ -151,9 +151,9 @@ export default function Orders() {
 
             // Per-category tables: Crates (Cr) and Loose (Lo) per flavour, plus a
       // Total column per hotel and an overall category grand total.
-      // Gridlines: a light horizontal rule under every hotel row, and a
-      // vertical line at every column boundary (hotel | MRP | each flavour
-      // | Total), so hotels and flavours are visually separated.
+      // Gridlines: bold black header rule + outer border, thin light-gray
+      // rules between hotels, and a bold rule separating hotels from the
+      // totals row — plus a vertical divider at every column boundary.
       categories.forEach((cat) => {
         const hotels = Object.entries(groupedSummary[cat] || {});
         if (hotels.length === 0) return;
@@ -162,12 +162,17 @@ export default function Orders() {
         const rightEdge = totalX + 14;
         const colXs = [14, 70, ...flavs.map((_, i) => 90 + i * 14), totalX, rightEdge];
 
+        const boldRule = (yy) => { pdf.setDrawColor(0); pdf.setLineWidth(0.4); pdf.line(14, yy, rightEdge, yy); };
+        const lightRule = (yy) => { pdf.setDrawColor(205); pdf.setLineWidth(0.1); pdf.line(14, yy, rightEdge, yy); };
+        const resetLine = () => { pdf.setDrawColor(0); pdf.setLineWidth(0.2); };
+
         if (y > 270) { pdf.addPage(); y = 20; }
         pdf.setFont("helvetica", "bold");
         pdf.text(cat, 14, y); y += 5;
         pdf.setFont("helvetica", "normal");
 
         let sectionTop = y - 3;
+        boldRule(sectionTop);
 
         pdf.setFontSize(7);
         pdf.text("Hotel", 14, y);
@@ -182,11 +187,12 @@ export default function Orders() {
         });
         pdf.text("Cr", totalX, y); pdf.text("Lo", totalX + 7, y);
         y += 2;
-        pdf.line(14, y, rightEdge, y);
+        boldRule(y);
         y += 3;
 
-        hotels.forEach(([hotel, h]) => {
+        hotels.forEach(([hotel, h], idx) => {
           if (y > 285) {
+            resetLine();
             colXs.forEach((x) => pdf.line(x, sectionTop, x, y - 1));
             pdf.addPage();
             y = 20;
@@ -208,11 +214,46 @@ export default function Orders() {
           pdf.text(String(rt.loose), totalX + 7, y);
           pdf.setFont("helvetica", "normal");
           y += 3.5;
-          pdf.setDrawColor(220);
-          pdf.line(14, y, rightEdge, y);
-          pdf.setDrawColor(0);
+          if (idx < hotels.length - 1) lightRule(y);
           y += 1.5;
         });
+
+        // bold rule separating the hotel list from the totals row
+        boldRule(y);
+        y += 3;
+
+        if (y > 285) {
+          resetLine();
+          colXs.forEach((x) => pdf.line(x, sectionTop, x, y - 4));
+          pdf.addPage();
+          y = 20;
+          sectionTop = y - 2;
+          boldRule(y - 1);
+        }
+        pdf.setFont("helvetica", "bold");
+        pdf.text("Total Cr/Lo", 14, y);
+        flavs.forEach((fl, i) => {
+          const x = 90 + i * 14;
+          const t = flavourTotals[cat]?.[fl] || { crates: 0, loose: 0 };
+          pdf.text(String(t.crates), x, y);
+          pdf.text(String(t.loose), x + 7, y);
+        });
+        const gt = categoryGrandTotal(cat);
+        pdf.text(String(gt.crates), totalX, y);
+        pdf.text(String(gt.loose), totalX + 7, y);
+        pdf.setFont("helvetica", "normal");
+        y += 3;
+        boldRule(y);
+
+        // outer border + vertical column dividers for this table (or its
+        // final page segment, if it spilled across a page break)
+        pdf.setDrawColor(0);
+        pdf.setLineWidth(0.4);
+        colXs.forEach((x) => pdf.line(x, sectionTop, x, y));
+        resetLine();
+
+        y += 6;
+      });
 
         // totals row (crates / loose per flavour + overall category grand total)
         if (y > 285) {
