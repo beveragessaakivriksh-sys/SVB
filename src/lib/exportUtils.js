@@ -162,7 +162,9 @@ export function buildGstZohoRows(bill, customer) {
     row["SGST(FCY)"] = sgst;
     row["CGST"] = cgst;
     row["SGST"] = sgst;
-    row["Item Tax Amount"] = +(cgst + sgst).toFixed(2);
+    const itemTaxAmount = +(cgst + sgst).toFixed(2);
+    row["Item Tax Amount"] = itemTaxAmount;
+    row["Total"] = +(itemTotal + itemTaxAmount).toFixed(2);
     rows.push(GST_ZOHO_COLUMNS.map((c) => row[c] ?? ""));
   });
   return rows;
