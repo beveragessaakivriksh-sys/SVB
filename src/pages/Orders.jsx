@@ -214,7 +214,7 @@ export default function Orders() {
           pdf.setFont("helvetica", "normal");
           y += 1.8;
           if (idx < hotels.length - 1) lightRule(y);
-          y += 3.2;
+          y += 1.8;
         });
 
         // bold rule separating the hotel list from the totals row
