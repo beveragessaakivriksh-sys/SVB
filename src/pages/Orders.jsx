@@ -212,7 +212,7 @@ export default function Orders() {
           pdf.text(String(rt.crates), totalX, y);
           pdf.text(String(rt.loose), totalX + 7, y);
           pdf.setFont("helvetica", "normal");
-          y += 1.3;
+          y += 1.8;
           if (idx < hotels.length - 1) lightRule(y);
           y += 1.8;
         });
