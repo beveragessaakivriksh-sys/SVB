@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ListChecks, Truck, FileDown, Pencil } from "lucide-react";
+import { ListChecks, Truck, FileDown, Pencil, Printer } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
 export default function Orders() {
@@ -138,7 +138,32 @@ export default function Orders() {
     );
   };
 
-  const saveSummaryPdf = async () => {
+    // Opens the browser's print dialog for a jsPDF document (A4), using a
+  // hidden iframe so it prints directly without needing to save first.
+  const printPdfDirect = (pdf) => {
+    const url = pdf.output("bloburl");
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    iframe.src = url;
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+      } catch {
+        // fallback: open the PDF in a new tab so it can be printed from there
+        window.open(url, "_blank");
+      }
+    };
+    document.body.appendChild(iframe);
+    setTimeout(() => { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); }, 60000);
+  };
+
+  const saveSummaryPdf = async (mode = "save") => {
     if (summaryOrders.length === 0) return toast({ variant: "destructive", title: "Select orders to summarize" });
     try {
       const { jsPDF } = await import("jspdf");
@@ -254,6 +279,11 @@ export default function Orders() {
         y += 6;
       });
 
+            if (mode === "print") {
+        printPdfDirect(pdf);
+        toast({ title: "Opening print dialog (A4)" });
+        return;
+      }
       pdf.save(`orders_summary_${todayISO()}.pdf`);
       toast({ title: "Summary saved as PDF" });
     } catch (e) {
@@ -653,7 +683,10 @@ export default function Orders() {
           <DialogHeader>
             <div className="flex items-center justify-between gap-2 pr-8">
               <DialogTitle>Order Summary — by hotel & flavour</DialogTitle>
-              <Button variant="outline" size="sm" onClick={saveSummaryPdf}><FileDown className="h-4 w-4 mr-1" /> Save as PDF</Button>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => saveSummaryPdf("print")}><Printer className="h-4 w-4 mr-1" /> Print (A4)</Button>
+                <Button variant="outline" size="sm" onClick={() => saveSummaryPdf("save")}><FileDown className="h-4 w-4 mr-1" /> Save as PDF</Button>
+              </div>
             </div>
           </DialogHeader>
           <div ref={summaryRef} className="max-h-[70vh] space-y-4 overflow-y-auto">
