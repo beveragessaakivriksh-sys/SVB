@@ -3,7 +3,9 @@ import { db } from "@/api/db";
 import { useEffect, useMemo, useState } from "react";
 
 import PageShell from "@/components/PageShell";
-import { CATEGORIES, FLAVOURS, bottlesPerCrate } from "@/lib/constants";
+import { bottlesPerCrate } from "@/lib/constants";
+import { itemBottles } from "@/lib/billUtils";
+import { useProducts } from "@/lib/useProducts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import supabase from "@/lib/supabaseClient";
@@ -16,7 +18,7 @@ import { BrainCircuit, Loader2, Sparkles, AlertTriangle } from "lucide-react";
 const GREENS = ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#8b5cf6", "#ef4444", "#14b8a6", "#f97316", "#3b82f6", "#a855f7", "#84cc16"];
 
 export default function DataAnalytics() {
-  const [deliveries, setDeliveries] = useState([]);
+  const [bills, setBills] = useState([]);
   const [production, setProduction] = useState([]);
   const [crates, setCrates] = useState([]);
   const [prediction, setPrediction] = useState("");
@@ -26,10 +28,40 @@ export default function DataAnalytics() {
   const [narrativeError, setNarrativeError] = useState("");
 
   useEffect(() => {
-    db.entities.Delivery.list("-delivery_date", 500).then(setDeliveries);
+    db.entities.Bill.list("-invoice_date", 1000).then(setBills);
     db.entities.DailyProduction.list("-production_date", 200).then(setProduction);
     db.entities.CrateEntry.list("-entry_date", 200).then(setCrates);
   }, []);
+
+  const { productList } = useProducts();
+
+  // Bills are the source of truth for what was actually entered (items,
+  // totals, payment status), so every chart below is built from them.
+  const deliveries = useMemo(
+    () => bills.map((b) => ({
+      id: b.id,
+      delivery_date: b.invoice_date,
+      customer_name: b.customer_name,
+      items: b.items || [],
+      total_bottles: (b.items || []).reduce((s, it) => s + itemBottles(it), 0),
+      total_amount: Number(b.total) || 0,
+      payment_status: b.payment_status,
+    })),
+    [bills]
+  );
+
+  // Products configured in Settings + anything that actually appears in the
+  // data, so no flavour/category is ever silently dropped.
+  const catalogue = useMemo(() => {
+    const m = new Map();
+    productList.forEach((p) => m.set(`${p.category}|${p.flavour}`, { category: p.category, flavour: p.flavour }));
+    deliveries.forEach((d) => (d.items || []).forEach((it) => {
+      if (it.category && it.flavour) m.set(`${it.category}|${it.flavour}`, { category: it.category, flavour: it.flavour });
+    }));
+    return [...m.values()];
+  }, [productList, deliveries]);
+  const CATEGORIES = useMemo(() => [...new Set(catalogue.map((p) => p.category))], [catalogue]);
+  const FLAVOURS = useMemo(() => [...new Set(catalogue.map((p) => p.flavour))], [catalogue]);
 
   const byFlavour = useMemo(() => {
     const map = {};
@@ -40,7 +72,7 @@ export default function DataAnalytics() {
       });
     });
     return Object.entries(map).map(([flavour, bottles]) => ({ flavour, bottles }));
-  }, [deliveries]);
+  }, [deliveries, CATEGORIES, FLAVOURS]);
 
   const byCategory = useMemo(() => {
     const map = {};
@@ -51,7 +83,7 @@ export default function DataAnalytics() {
       });
     });
     return Object.entries(map).map(([category, bottles]) => ({ category, bottles }));
-  }, [deliveries]);
+  }, [deliveries, CATEGORIES, FLAVOURS]);
 
   const productionVsDelivery = useMemo(() => {
     const byDate = {};
@@ -76,7 +108,7 @@ export default function DataAnalytics() {
       const avg = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
       return { flavour: fl, predicted: Math.round(avg * 7) };
     }).filter((x) => x.predicted > 0);
-  }, [deliveries]);
+  }, [deliveries, CATEGORIES, FLAVOURS]);
 
   const weeklyForecast = useMemo(() => {
     const dowBottles = [0, 0, 0, 0, 0, 0, 0];
@@ -97,26 +129,28 @@ export default function DataAnalytics() {
       out.push({ date: dt.toISOString().slice(0, 10), weekday: dt.toLocaleDateString("en-IN", { weekday: "short" }), expected: avg[dow] });
     }
     return out;
-  }, [deliveries]);
+  }, [deliveries, CATEGORIES, FLAVOURS]);
 
   const flavourForecast = useMemo(() => {
-    const map = {};
-    CATEGORIES.forEach((c) => FLAVOURS.forEach((f) => (map[`${c}|${f}`] = { category: c, flavour: f, total: 0, days: 0 })));
-    deliveries.forEach((d) => (d.items || []).forEach((it) => {
-      const k = `${it.category}|${it.flavour}`;
-      if (!map[k]) return;
-      map[k].total += (Number(it.crates) || 0) * bottlesPerCrate(it.category) + (Number(it.loose) || 0);
-      map[k].days += 1;
-    }));
+    const dates = [...new Set(deliveries.map((d) => d.delivery_date).filter(Boolean))].sort().slice(-14);
+    const windowDays = dates.length || 1;
+    const inWindow = new Set(dates);
+    const totals = {};
+    deliveries.forEach((d) => {
+      if (!inWindow.has(d.delivery_date)) return;
+      (d.items || []).forEach((it) => {
+        const k = `${it.category}|${it.flavour}`;
+        totals[k] = (totals[k] || 0) + (Number(it.crates) || 0) * bottlesPerCrate(it.category) + (Number(it.loose) || 0);
+      });
+    });
     return CATEGORIES.map((c) => ({
       category: c,
-      flavours: FLAVOURS.map((f) => {
-        const m = map[`${c}|${f}`];
-        const avg = m.days ? m.total / m.days : 0;
-        return { flavour: f, predicted: Math.round(avg * 7) };
-      }),
+      flavours: catalogue.filter((p) => p.category === c).map((p) => ({
+        flavour: p.flavour,
+        predicted: Math.round(((totals[`${c}|${p.flavour}`] || 0) / windowDays) * 7),
+      })),
     }));
-  }, [deliveries]);
+  }, [deliveries, catalogue, CATEGORIES]);
 
   const dailyEntries = useMemo(() => {
     const map = {};
@@ -127,7 +161,7 @@ export default function DataAnalytics() {
       map[d.delivery_date].bottles += Number(d.total_bottles) || 0;
     });
     return Object.values(map).sort((a, b) => a.date.localeCompare(b.date)).slice(-14);
-  }, [deliveries]);
+  }, [deliveries, CATEGORIES, FLAVOURS]);
 
   const paymentStatus = useMemo(() => {
     const completed = deliveries.filter((d) => d.payment_status === "completed").length;
@@ -135,7 +169,7 @@ export default function DataAnalytics() {
       { name: "Completed", value: completed },
       { name: "Pending", value: deliveries.length - completed },
     ];
-  }, [deliveries]);
+  }, [deliveries, CATEGORIES, FLAVOURS]);
 
   const topHotels = useMemo(() => {
     const map = {};
@@ -144,7 +178,7 @@ export default function DataAnalytics() {
       map[name] = (map[name] || 0) + (Number(d.total_bottles) || 0);
     });
     return Object.entries(map).map(([name, bottles]) => ({ name, bottles })).sort((a, b) => b.bottles - a.bottles).slice(0, 6);
-  }, [deliveries]);
+  }, [deliveries, CATEGORIES, FLAVOURS]);
 
   const runPrediction = () => {
     // NOTE: base44's original build called a hosted serverless function

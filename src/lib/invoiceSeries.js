@@ -7,6 +7,9 @@ import { padNumber } from "./billUtils";
 export const DEFAULT_SERIES = {
   gst: { type: "gst", prefix: "INV-", series_name: "GST Series", next_number: 1001, padding: 4 },
   non_gst: { type: "non_gst", prefix: "NG-", series_name: "Non-GST Series", next_number: 1001, padding: 4 },
+  // Internal series: numbers the internal orders created in Incoming Orders.
+  // The real (GST / Non-GST) invoice number is only taken at dispatch.
+  internal: { type: "internal", prefix: "INT-", series_name: "Internal Series", next_number: 1, padding: 4 },
 };
 
 // Returns the active series for a bill type, or null.
@@ -28,6 +31,16 @@ export async function ensureInvoiceSeries(type) {
 export async function nextInvoiceNumber(hasGst) {
   const type = hasGst ? "gst" : "non_gst";
   const ser = await ensureInvoiceSeries(type);
+  const number = `${ser.prefix}${padNumber(ser.next_number, ser.padding)}`;
+  await db.entities.InvoiceSeries.update(ser.id, { next_number: (Number(ser.next_number) || 0) + 1 });
+  return { number, seriesName: ser.series_name };
+}
+
+// Generates the next INTERNAL order number (used by Incoming Orders). Same
+// logic as nextInvoiceNumber, but on the separate "internal" series, so
+// creating an order does not use up a real invoice number.
+export async function nextInternalNumber() {
+  const ser = await ensureInvoiceSeries("internal");
   const number = `${ser.prefix}${padNumber(ser.next_number, ser.padding)}`;
   await db.entities.InvoiceSeries.update(ser.id, { next_number: (Number(ser.next_number) || 0) + 1 });
   return { number, seriesName: ser.series_name };

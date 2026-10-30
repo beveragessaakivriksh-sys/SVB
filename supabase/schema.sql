@@ -1298,3 +1298,81 @@ create policy "orders_delete" on public.orders for delete
 -- End of migration
 -- ===================================================================
 
+
+-- ============================== 010_internal_invoice_series.sql ==============================
+
+-- =====================================================================
+-- SVB — Internal invoice series
+-- File: supabase/migrations/010_internal_invoice_series.sql
+--
+-- Orders created in Incoming Orders now get their own INTERNAL number from a
+-- separate series (configurable in Settings -> Invoice Series). The real
+-- GST / Non-GST invoice number is only taken when the order is dispatched
+-- from the Orders tab and moves to Bill Entries.
+--
+-- invoice_series.type was restricted to ('gst','non_gst'), so allow
+-- 'internal' too and add a default internal series (INT-0001).
+-- Safe to run more than once.
+-- =====================================================================
+
+-- Drop the old CHECK on invoice_series.type (whatever it is named) ...
+DO $$
+DECLARE
+  c record;
+BEGIN
+  FOR c IN
+    SELECT conname
+    FROM pg_constraint
+    WHERE conrelid = 'public.invoice_series'::regclass
+      AND contype = 'c'
+      AND pg_get_constraintdef(oid) ILIKE '%non_gst%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.invoice_series DROP CONSTRAINT %I', c.conname);
+  END LOOP;
+END;
+$$;
+
+-- ... and re-add it with 'internal' allowed.
+ALTER TABLE public.invoice_series DROP CONSTRAINT IF EXISTS invoice_series_type_check;
+ALTER TABLE public.invoice_series
+  ADD CONSTRAINT invoice_series_type_check CHECK (type IN ('gst', 'non_gst', 'internal'));
+
+-- Default internal series (no-op if one already exists).
+INSERT INTO public.invoice_series (id, type, prefix, series_name, next_number, padding)
+VALUES (gen_random_uuid(), 'internal', 'INT-', 'Internal Series', 1, 4)
+ON CONFLICT (type) DO NOTHING;
+
+-- Keep the server-side counter helper in step (the app itself increments the
+-- counter from the frontend; this RPC is optional).
+CREATE OR REPLACE FUNCTION public.next_invoice_number(p_type text)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_prefix text;
+  v_next numeric;
+  v_padding numeric;
+BEGIN
+  INSERT INTO public.invoice_series (id, type, prefix, series_name, next_number, padding)
+  VALUES (gen_random_uuid(),
+    p_type,
+    CASE p_type WHEN 'gst' THEN 'INV-' WHEN 'internal' THEN 'INT-' ELSE 'NG-' END,
+    CASE p_type WHEN 'gst' THEN 'GST Series' WHEN 'internal' THEN 'Internal Series' ELSE 'Non-GST Series' END,
+    CASE p_type WHEN 'internal' THEN 1 ELSE 1001 END, 4)
+  ON CONFLICT (type) DO NOTHING;
+
+  UPDATE public.invoice_series
+  SET next_number = next_number + 1
+  WHERE type = p_type
+  RETURNING prefix, next_number - 1, padding INTO v_prefix, v_next, v_padding;
+
+  RETURN v_prefix || lpad(v_next::text, v_padding::int, '0');
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO authenticated;
+
+-- ===================================================================
+-- End of migration
+-- ===================================================================

@@ -15,6 +15,9 @@ import { Switch } from "@/components/ui/switch";
 import { Plus, Trash2, Save, Database, Pencil, Check, X } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
+const SERIES_LABELS = { gst: "GST Customers", non_gst: "Non-GST Customers", internal: "Internal Orders (Incoming Orders)" };
+const SERIES_SHORT = { gst: "GST", non_gst: "Non-GST", internal: "Internal" };
+
 export default function Settings() {
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -177,12 +180,12 @@ export default function Settings() {
         {/* Invoice Series */}
         <div className="rounded-xl border border-border bg-card p-4">
           <h3 className="mb-1 text-sm font-semibold">Invoice Series</h3>
-          <p className="mb-3 text-[11px] text-muted-foreground">Set the invoice prefix and current bill number. The counter auto-increments on each new bill.</p>
+          <p className="mb-3 text-[11px] text-muted-foreground">Set the invoice prefix and current bill number. The counter auto-increments on each new bill. The Internal series numbers the orders created in Incoming Orders; the GST / Non-GST series number is taken when an order is dispatched.</p>
           {series.map((s) => {
             const d = drafts[s.id] || { prefix: s.prefix, series_name: s.series_name, next_number: s.next_number, padding: s.padding };
             return (
               <div key={s.id} className="mb-3 rounded-lg border border-border p-3">
-                <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{s.type === "gst" ? "GST Customers" : "Non-GST Customers"}</div>
+                <div className="mb-2 text-xs font-semibold uppercase text-muted-foreground">{SERIES_LABELS[s.type] || s.type}</div>
                 <div className="grid gap-2 sm:grid-cols-4">
                   <div><Label className="text-xs">Prefix</Label><Input value={d.prefix} onChange={(e) => setDraft(s.id, "prefix", e.target.value)} /></div>
                   <div><Label className="text-xs">Series Name</Label><Input value={d.series_name} onChange={(e) => setDraft(s.id, "series_name", e.target.value)} /></div>
@@ -197,9 +200,9 @@ export default function Settings() {
             );
           })}
           <div className="flex flex-wrap gap-2">
-            {["gst", "non_gst"].filter((t) => !series.some((s) => s.type === t)).map((t) => (
+            {["gst", "non_gst", "internal"].filter((t) => !series.some((s) => s.type === t)).map((t) => (
               <Button key={t} size="sm" variant="outline" onClick={() => addSeries(t)}>
-                <Plus className="h-4 w-4 mr-1" /> Add {t === "gst" ? "GST" : "Non-GST"} series ({DEFAULT_SERIES[t].prefix}{DEFAULT_SERIES[t].next_number})
+                <Plus className="h-4 w-4 mr-1" /> Add {SERIES_SHORT[t]} series ({DEFAULT_SERIES[t].prefix}{DEFAULT_SERIES[t].next_number})
               </Button>
             ))}
           </div>

@@ -10,29 +10,44 @@ import { Label } from "@/components/ui/label";
 import { Truck, Package, IndianRupee, Boxes, FileText } from "lucide-react";
 
 export default function Dashboard() {
+  const [mode, setMode] = useState("day"); // "day" | "month"
   const [date, setDate] = useState(todayISO());
+  const [month, setMonth] = useState(todayISO().slice(0, 7)); // YYYY-MM
   const [deliveries, setDeliveries] = useState([]);
   const [crates, setCrates] = useState([]);
   const [bills, setBills] = useState([]);
 
   useEffect(() => {
-    db.entities.Delivery.list("-delivery_date", 500).then(setDeliveries);
-    db.entities.CrateEntry.list("-entry_date", 500).then(setCrates);
-    db.entities.Bill.list("-invoice_date", 500).then(setBills);
+    db.entities.Delivery.list("-delivery_date", 1000).then(setDeliveries);
+    db.entities.CrateEntry.list("-entry_date", 1000).then(setCrates);
+    db.entities.Bill.list("-invoice_date", 1000).then(setBills);
   }, []);
 
+  const periodLabel = mode === "day" ? date : month;
+  const inPeriod = (d) => (mode === "day" ? d === date : (d || "").startsWith(month));
+
   const day = useMemo(() => {
-    const d = deliveries.filter((x) => x.delivery_date === date);
-    const c = crates.filter((x) => x.entry_date === date);
-    const b = bills.filter((x) => x.invoice_date === date);
+    // Payments are recorded on the bill (Bill Entries), not on the delivery
+    // record, so take payment status / paid amount from the linked bill.
+    const billsById = Object.fromEntries(bills.map((b) => [b.id, b]));
+    const d = deliveries
+      .filter((x) => inPeriod(x.delivery_date))
+      .map((x) => {
+        const b = billsById[x.bill_id];
+        return b
+          ? { ...x, payment_status: b.payment_status, paid_amount: b.paid_amount, total_amount: Number(b.total) || x.total_amount }
+          : x;
+      });
+    const c = crates.filter((x) => inPeriod(x.entry_date));
+    const b = bills.filter((x) => inPeriod(x.invoice_date));
     const bottlesDelivered = d.reduce((s, x) => s + (x.total_bottles || 0), 0);
     const cratesReturned = c.reduce((s, x) => s + (x.crates_returned || 0), 0);
     const damaged = c.reduce((s, x) => s + (x.damaged_bottles || 0), 0);
     const revenue = b.reduce((s, x) => s + (x.total || 0), 0);
-    const collected = d.filter((x) => x.payment_status === "completed").reduce((s, x) => s + (x.total_amount || 0), 0);
-    const pending = d.filter((x) => x.payment_status === "pending").length;
+    const collected = b.reduce((s, x) => s + (x.payment_status === "completed" ? (x.total || 0) : (Number(x.paid_amount) || 0)), 0);
+    const pending = b.filter((x) => x.payment_status !== "completed").length;
     return { d, c, b, bottlesDelivered, cratesReturned, damaged, revenue, collected, pending };
-  }, [date, deliveries, crates, bills]);
+  }, [mode, date, month, deliveries, crates, bills]);
 
   const cards = [
     { label: "Deliveries", value: day.d.length, icon: Truck },
@@ -48,7 +63,7 @@ export default function Dashboard() {
   const downloadPdf = async () => {
     const { jsPDF } = await import("jspdf");
     const pdf = new jsPDF("p", "mm", "a4");
-    pdf.setFontSize(16); pdf.text(`Dashboard — ${date}`, 14, 18);
+    pdf.setFontSize(16); pdf.text(`Dashboard — ${periodLabel}`, 14, 18);
     pdf.setFontSize(10);
     let y = 30;
     cards.forEach((c, i) => {
@@ -59,21 +74,56 @@ export default function Dashboard() {
     y += 12;
     pdf.setFontSize(12); pdf.text("Deliveries", 14, y); y += 6;
     pdf.setFontSize(9);
-    day.d.forEach((x) => { pdf.text(`${x.customer_name} — ${x.total_bottles} btl — Rs.${(x.total_amount||0).toFixed(0)} — ${x.payment_status}`, 14, y); y += 5; });
-    y += 4; pdf.setFontSize(12); pdf.text("Invoices", 14, y); y += 6; pdf.setFontSize(9);
-    day.b.forEach((x) => { pdf.text(`${x.invoice_number} — ${x.customer_name} — Rs.${(x.total||0).toFixed(0)}`, 14, y); y += 5; });
-    pdf.save(`dashboard_${date}.pdf`);
+    day.d.forEach((x) => {
+      if (y > 280) { pdf.addPage(); y = 20; }
+      pdf.text(`${mode === "month" ? `${x.delivery_date} — ` : ""}${x.customer_name} — ${x.total_bottles} btl — Rs.${(x.total_amount || 0).toFixed(0)} — ${x.payment_status}`, 14, y);
+      y += 5;
+    });
+    y += 4;
+    if (y > 270) { pdf.addPage(); y = 20; }
+    pdf.setFontSize(12); pdf.text("Invoices", 14, y); y += 6; pdf.setFontSize(9);
+    day.b.forEach((x) => {
+      if (y > 280) { pdf.addPage(); y = 20; }
+      pdf.text(`${mode === "month" ? `${x.invoice_date} — ` : ""}${x.invoice_number} — ${x.customer_name} — Rs.${(x.total || 0).toFixed(0)}`, 14, y);
+      y += 5;
+    });
+    pdf.save(`dashboard_${periodLabel}.pdf`);
   };
 
   return (
     <PageShell
       title="Dashboard"
-      subtitle="Live tracking for the selected date"
+      subtitle={mode === "day" ? "Live tracking for the selected date" : "Full summary for the selected month"}
       actions={<Button variant="outline" onClick={downloadPdf}>Download PDF</Button>}
     >
-      <div className="mb-4 max-w-[200px]">
-        <Label>Date</Label>
-        <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="flex overflow-hidden rounded-md border border-input">
+          <button
+            type="button"
+            onClick={() => setMode("day")}
+            className={`px-4 py-2 text-sm font-medium ${mode === "day" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground"}`}
+          >
+            Day
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("month")}
+            className={`px-4 py-2 text-sm font-medium ${mode === "month" ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground"}`}
+          >
+            Month
+          </button>
+        </div>
+        {mode === "day" ? (
+          <div className="max-w-[200px]">
+            <Label>Date</Label>
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+        ) : (
+          <div className="max-w-[200px]">
+            <Label>Month</Label>
+            <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+          </div>
+        )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -93,35 +143,37 @@ export default function Dashboard() {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-border">
-          <div className="border-b border-border bg-muted/40 px-4 py-2 text-sm font-semibold">Today's Deliveries</div>
+          <div className="border-b border-border bg-muted/40 px-4 py-2 text-sm font-semibold">{mode === "day" ? "Today's Deliveries" : "Deliveries this month"}</div>
           <div className="max-h-80 overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-xs text-muted-foreground"><tr><th className="p-3">Customer</th><th className="p-3 text-right">Bottles</th><th className="p-3 text-right">Amount</th><th className="p-3">Payment</th><th className="p-3 text-right">Balance</th></tr></thead>
+              <thead className="text-left text-xs text-muted-foreground"><tr>{mode === "month" && <th className="p-3">Date</th>}<th className="p-3">Customer</th><th className="p-3 text-right">Bottles</th><th className="p-3 text-right">Amount</th><th className="p-3">Payment</th><th className="p-3 text-right">Balance</th></tr></thead>
               <tbody>
                 {day.d.map((x) => (
                   <tr key={x.id} className="border-t border-border">
+                    {mode === "month" && <td className="p-3 whitespace-nowrap">{x.delivery_date}</td>}
                     <td className="p-3">{x.customer_name}</td><td className="p-3 text-right">{x.total_bottles}</td>
                     <td className="p-3 text-right">₹ {(x.total_amount || 0).toFixed(0)}</td><td className="p-3 capitalize">{x.payment_status}</td>
                     <td className="p-3 text-right">{x.payment_status === "pending" ? `₹ ${Math.max(0, (x.total_amount || 0) - (x.paid_amount || 0)).toFixed(0)}` : "—"}</td>
                   </tr>
                 ))}
-                {day.d.length === 0 && <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No deliveries</td></tr>}
+                {day.d.length === 0 && <tr><td colSpan={mode === "month" ? 6 : 5} className="p-4 text-center text-muted-foreground">No deliveries</td></tr>}
               </tbody>
             </table>
           </div>
         </div>
         <div className="rounded-xl border border-border">
-          <div className="border-b border-border bg-muted/40 px-4 py-2 text-sm font-semibold">Today's Invoices</div>
+          <div className="border-b border-border bg-muted/40 px-4 py-2 text-sm font-semibold">{mode === "day" ? "Today's Invoices" : "Invoices this month"}</div>
           <div className="max-h-80 overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-xs text-muted-foreground"><tr><th className="p-3">Invoice #</th><th className="p-3">Customer</th><th className="p-3 text-right">Total</th></tr></thead>
+              <thead className="text-left text-xs text-muted-foreground"><tr>{mode === "month" && <th className="p-3">Date</th>}<th className="p-3">Invoice #</th><th className="p-3">Customer</th><th className="p-3 text-right">Total</th></tr></thead>
               <tbody>
                 {day.b.map((x) => (
                   <tr key={x.id} className="border-t border-border">
+                    {mode === "month" && <td className="p-3 whitespace-nowrap">{x.invoice_date}</td>}
                     <td className="p-3">{x.invoice_number}</td><td className="p-3">{x.customer_name}</td><td className="p-3 text-right">₹ {(x.total || 0).toFixed(0)}</td>
                   </tr>
                 ))}
-                {day.b.length === 0 && <tr><td colSpan={3} className="p-4 text-center text-muted-foreground">No invoices</td></tr>}
+                {day.b.length === 0 && <tr><td colSpan={mode === "month" ? 4 : 3} className="p-4 text-center text-muted-foreground">No invoices</td></tr>}
               </tbody>
             </table>
           </div>

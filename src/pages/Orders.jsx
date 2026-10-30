@@ -8,12 +8,14 @@ import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
 import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItemsFromProductList } from "@/lib/billUtils";
 import { useProducts } from "@/lib/useProducts";
+import { nextInvoiceNumber } from "@/lib/invoiceSeries";
+import { cloneToTodayOrder } from "@/lib/cloneOrder";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ListChecks, Truck, FileDown, Pencil, Printer } from "lucide-react";
+import { ListChecks, Truck, FileDown, Pencil, Printer, Copy } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
 export default function Orders() {
@@ -290,6 +292,38 @@ export default function Orders() {
       toast({ variant: "destructive", title: "Could not save PDF", description: e.message });
     }
   };
+  // Clone: copies the selected (checked) orders into NEW pending orders dated
+  // today — same hotel and items, today's prices, fresh internal number.
+  const cloneSelectedToToday = async () => {
+    if (summaryOrders.length === 0) return toast({ variant: "destructive", title: "Select orders to clone" });
+    if (!confirm(`Create ${summaryOrders.length} new order(s) for today (${todayISO()}) from the selected order(s)?`)) return;
+    setBusy(true);
+    try {
+      let made = 0;
+      for (const o of summaryOrders) {
+        const customer = customersById[o.customer_id];
+        if (!customer) {
+          toast({ variant: "destructive", title: `Skipped ${o.internal_invoice_number}`, description: "Its customer no longer exists." });
+          continue;
+        }
+        await cloneToTodayOrder({ customer, items: o.items, user });
+        made += 1;
+      }
+      if (made > 0) {
+        toast({ title: `Cloned ${made} order(s) to today` });
+        setSelectedIds(new Set());
+        setSpecificDate("");
+        setFrom(todayISO());
+        setTo(todayISO());
+        load();
+      }
+    } catch (e) {
+      toast({ variant: "destructive", title: "Could not clone", description: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const dispatch = async (o) => {
     if (o.dispatch_status === "dispatched") {
       // unmark
@@ -328,15 +362,25 @@ export default function Orders() {
         load();
         return;
       }
-      // Non-GST: create the bill + delivery now
+      // Create the bill + delivery now (GST and Non-GST). The real invoice
+      // number comes from the normal GST / Non-GST series at this point.
+      // Orders that already carry a number (older orders, or a re-dispatch
+      // after an unmark) keep it, so no number is used up twice.
+      let invoiceNo = o.invoice_number;
+      let seriesName = o.invoice_series;
+      if (!invoiceNo) {
+        const next = await nextInvoiceNumber(o.has_gst);
+        invoiceNo = next.number;
+        seriesName = next.seriesName;
+      }
       const customer = customersById[o.customer_id];
       const rateOf = (it) => Number(it.rate) || getProductPrice(customer, it.category, it.flavour);
       const items = (o.items || []).map((it) => ({ ...it, rate: rateOf(it), amount: itemAmount({ ...it, rate: rateOf(it) }) }));
       const totals = computeBillTotals(items, o.has_gst);
       const billData = {
         has_gst: o.has_gst,
-        invoice_number: o.invoice_number,
-        invoice_series: o.invoice_series,
+        invoice_number: invoiceNo,
+        invoice_series: seriesName,
         invoice_date: date,
         due_date: date,
         customer_id: o.customer_id,
@@ -387,9 +431,9 @@ export default function Orders() {
         total_amount: totals.total,
         bill_id: bill.id,
       });
-      await db.entities.Order.update(o.id, { dispatch_status: "dispatched", dispatched_date: date, bill_id: bill.id });
-      setSelected({ ...o, dispatch_status: "dispatched", dispatched_date: date, bill_id: bill.id, delivery_id: delivery.id });
-      toast({ title: "Dispatched", description: `Invoice ${o.invoice_number} created in Bill Entries` });
+      await db.entities.Order.update(o.id, { dispatch_status: "dispatched", dispatched_date: date, bill_id: bill.id, invoice_number: invoiceNo, invoice_series: seriesName });
+      setSelected({ ...o, dispatch_status: "dispatched", dispatched_date: date, bill_id: bill.id, delivery_id: delivery.id, invoice_number: invoiceNo, invoice_series: seriesName });
+      toast({ title: "Dispatched", description: `Invoice ${invoiceNo} created in Bill Entries` });
       load();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
@@ -403,7 +447,7 @@ export default function Orders() {
   // linked Bill for editing directly from the Orders tab, instead of
   // having to separately find it in Bill Entries.
   const openModify = (o) => {
-    const bill = bills.find((b) => b.id === o.bill_id) || bills.find((b) => b.invoice_number === o.invoice_number);
+    const bill = bills.find((b) => b.id === o.bill_id) || (o.invoice_number ? bills.find((b) => b.invoice_number === o.invoice_number) : undefined);
     if (!bill) return toast({ variant: "destructive", title: "No invoice yet", description: "Dispatch this order first to create its invoice." });
     const customer = customersById[bill.customer_id];
     const merged = buildItemsFromProductList(productList).map((p) => {
@@ -503,6 +547,7 @@ export default function Orders() {
       subtitle="Internal invoices — review, summarize and dispatch to create the actual bill"
       actions={
         <>
+          <Button variant="outline" disabled={busy} onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today</Button>
           <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
           <Button onClick={openSummary}><ListChecks className="h-4 w-4 mr-2" /> Summary</Button>
         </>

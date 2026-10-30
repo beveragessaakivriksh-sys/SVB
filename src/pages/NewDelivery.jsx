@@ -7,7 +7,7 @@ import { Stepper } from "@/components/Stepper";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
 import { buildItemsFromProductList, computeBillTotals, getProductPrice, itemBottles, itemAmount, sortCustomersAlpha } from "@/lib/billUtils";
-import { nextInvoiceNumber } from "@/lib/invoiceSeries";
+import { nextInternalNumber } from "@/lib/invoiceSeries";
 import { useProducts } from "@/lib/useProducts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -62,9 +62,10 @@ export default function NewDelivery() {
     if (activeItems.length === 0) return toast({ variant: "destructive", title: "Add at least one item" });
     setSaving(true);
     try {
-      // Queries the active invoice series, takes the next sequence number and
-      // auto-increments the stored counter (creates a default fallback if missing).
-      const { number: baseNumber, seriesName } = await nextInvoiceNumber(customer.has_gst);
+      // Takes the next number from the INTERNAL series (Settings → Invoice
+      // Series) and auto-increments it. The real GST / Non-GST invoice number
+      // is only taken later, when the order is dispatched from the Orders tab.
+      const { number: internalNumber } = await nextInternalNumber();
       const date = orderDate;
       const itemsWithAmount = activeItems.map((it) => ({
         ...it,
@@ -76,14 +77,14 @@ export default function NewDelivery() {
       const totalBottles = itemsWithAmount.reduce((s, it) => s + itemBottles(it), 0);
 
       // Every incoming order creates an internal Order (reflected in Orders tab)
-      const order = await db.entities.Order.create({
+      await db.entities.Order.create({
         customer_id: customer.id,
         customer_name: customer.customer_name,
         display_name: customer.display_name || customer.customer_name,
         has_gst: customer.has_gst,
-        internal_invoice_number: `internal-${baseNumber}`,
-        invoice_number: baseNumber,
-        invoice_series: seriesName,
+        internal_invoice_number: internalNumber,
+        invoice_number: null,
+        invoice_series: null,
         order_date: date,
         items: itemsWithAmount,
         total_bottles: totalBottles,
@@ -92,69 +93,9 @@ export default function NewDelivery() {
         created_by_name: user?.email || "unknown",
       });
 
-      if (customer.has_gst) {
-        // GST: also create the real invoice in Bill Entries (dispatch pending);
-        // it is marked dispatched from the Orders tab.
-        const bill = await db.entities.Bill.create({
-          has_gst: true,
-          invoice_number: baseNumber,
-          invoice_series: seriesName,
-          invoice_date: date,
-          due_date: date,
-          customer_id: customer.id,
-          customer_name: customer.customer_name,
-          place_of_supply: customer.place_of_supply,
-          place_of_supply_state_code: customer.place_of_supply_state_code,
-          gst_treatment: customer.gst_treatment,
-          gstin: customer.gstin,
-          billing_attention: customer.billing_attention,
-          billing_address: customer.billing_address,
-          billing_street2: customer.billing_street2,
-          billing_city: customer.billing_city,
-          billing_state: customer.billing_state,
-          billing_country: customer.billing_country,
-          billing_code: customer.billing_code,
-          shipping_attention: customer.shipping_attention,
-          shipping_address: customer.shipping_address,
-          shipping_street2: customer.shipping_street2,
-          shipping_city: customer.shipping_city,
-          shipping_state: customer.shipping_state,
-          shipping_country: customer.shipping_country,
-          shipping_code: customer.shipping_code,
-          payment_terms_label: customer.payment_terms_label || "Due on Receipt",
-          items: itemsWithAmount,
-          subtotal: totals.subtotal,
-          tax_total: totals.tax,
-          total: totals.total,
-          returned_crates: 0,
-          damaged_bottles: 0,
-          payment_status: "pending",
-          paid_amount: 0,
-          dispatch_status: "pending",
-          dispatch_date: null,
-          delivery_status: "pending",
-          created_by_name: user?.email || "unknown",
-          modified_by_name: user?.email || "unknown",
-        });
-        await db.entities.Delivery.create({
-          customer_id: customer.id,
-          customer_name: customer.customer_name,
-          delivery_date: date,
-          payment_status: "pending",
-          items: itemsWithAmount,
-          returned_crates: 0,
-          damaged_bottles: 0,
-          total_bottles: totalBottles,
-          total_amount: totals.total,
-          bill_id: bill.id,
-        });
-        await db.entities.Order.update(order.id, { bill_id: bill.id });
-
-        toast({ title: "GST order saved", description: `${baseNumber} in Orders & Bill Entries (pending dispatch)` });
-      } else {
-
-        toast({ title: "Incoming order saved", description: `Internal ${baseNumber}` });
-      }
+      // The bill (invoice) is created when the order is dispatched from the
+      // Orders tab — for GST and Non-GST orders alike.
+      toast({ title: "Order saved", description: `${internalNumber} in Orders (pending dispatch)` });
 
       setItems(buildItemsFromProductList(productList));
       setCustomerId("");

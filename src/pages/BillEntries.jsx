@@ -9,6 +9,7 @@ import { printInvoiceA4, downloadInvoicePdf } from "@/lib/printUtils";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import ThermalPreview from "@/components/ThermalPreview";
 import BillSummary from "@/components/BillSummary";
+import { cloneToTodayOrder } from "@/lib/cloneOrder";
 import { downloadCsv, buildGstZohoRows, GST_ZOHO_COLUMNS, buildNonGstRows, NON_GST_COLUMNS } from "@/lib/exportUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -237,12 +238,39 @@ export default function BillEntries() {
   const summaryBills = filtered.filter((b) => selectedIds.has(b.id));
   const openSummary = () => { if (selectedIds.size === 0) return toast({ variant: "destructive", title: "Select bills to summarize" }); setShowSummary(true); };
 
+  // Clone: turns the selected (checked) bills into NEW pending orders dated
+  // today — same hotel and items, today's prices. They appear in the Orders
+  // tab and are dispatched from there like any other order.
+  const cloneSelectedToToday = async () => {
+    if (summaryBills.length === 0) return toast({ variant: "destructive", title: "Select bills to clone" });
+    if (!confirm(`Create ${summaryBills.length} new order(s) for today (${todayISO()}) from the selected bill(s)?`)) return;
+    try {
+      let made = 0;
+      for (const b of summaryBills) {
+        const customer = customersById[b.customer_id];
+        if (!customer) {
+          toast({ variant: "destructive", title: `Skipped ${b.invoice_number}`, description: "Its customer no longer exists." });
+          continue;
+        }
+        await cloneToTodayOrder({ customer, items: b.items, user });
+        made += 1;
+      }
+      if (made > 0) {
+        toast({ title: `Cloned ${made} order(s) to today`, description: "Find them in the Orders tab." });
+        setSelectedIds(new Set());
+      }
+    } catch (e) {
+      toast({ variant: "destructive", title: "Could not clone", description: e.message });
+    }
+  };
+
   return (
     <PageShell
       title="Bill Entries"
       subtitle="View, edit, print and export invoices"
       actions={
         <>
+          <Button variant="outline" onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today's Order</Button>
           <Button variant="outline" onClick={exportGst}><Download className="h-4 w-4 mr-2" /> GST CSV</Button>
           <Button variant="outline" onClick={exportNonGst}><Download className="h-4 w-4 mr-2" /> Non-GST CSV</Button>
           <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
