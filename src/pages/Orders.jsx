@@ -10,12 +10,13 @@ import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItems
 import { useProducts } from "@/lib/useProducts";
 import { nextInvoiceNumber } from "@/lib/invoiceSeries";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
+import { findOrderBill, deleteOrderCascade } from "@/lib/deleteOrder";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ListChecks, Truck, FileDown, Pencil, Printer, Copy } from "lucide-react";
+import { ListChecks, Truck, FileDown, Pencil, Printer, Copy, Trash2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
 export default function Orders() {
@@ -447,14 +448,16 @@ export default function Orders() {
   // linked Bill for editing directly from the Orders tab, instead of
   // having to separately find it in Bill Entries.
   const openModify = (o) => {
-    const bill = bills.find((b) => b.id === o.bill_id) || (o.invoice_number ? bills.find((b) => b.invoice_number === o.invoice_number) : undefined);
-    if (!bill) return toast({ variant: "destructive", title: "No invoice yet", description: "Dispatch this order first to create its invoice." });
-    const customer = customersById[bill.customer_id];
+    // A dispatched order has a linked invoice (bill) — edit that. An order that
+    // has not been dispatched yet has no bill, so edit the order itself.
+    const bill = findOrderBill(o, bills);
+    const customer = customersById[o.customer_id];
+    const source = bill ? bill.items : o.items;
     const merged = buildItemsFromProductList(productList).map((p) => {
-      const existing = (bill.items || []).find((x) => x.category === p.category && x.flavour === p.flavour);
+      const existing = (source || []).find((x) => x.category === p.category && x.flavour === p.flavour);
       return existing ? { ...p, ...existing } : { ...p, rate: getProductPrice(customer, p.category, p.flavour) };
     });
-    setModifyBill(bill);
+    setModifyBill(bill || null);
     setModifyItems(merged);
     setModifyOpen(true);
   };
@@ -464,13 +467,14 @@ export default function Orders() {
   };
 
   const modifyActiveItems = modifyItems.filter((it) => Number(it.crates) > 0 || Number(it.loose) > 0);
+  const modifyHasGst = modifyBill ? modifyBill.has_gst : !!selected?.has_gst;
   const modifyTotals = useMemo(
-    () => computeBillTotals(modifyActiveItems, modifyBill?.has_gst),
-    [modifyActiveItems, modifyBill]
+    () => computeBillTotals(modifyActiveItems, modifyHasGst),
+    [modifyActiveItems, modifyHasGst]
   );
 
   const saveModify = async () => {
-    if (!modifyBill) return;
+    if (!selected) return;
     if (modifyActiveItems.length === 0) return toast({ variant: "destructive", title: "Add at least one item" });
     setModifySaving(true);
     try {
@@ -482,23 +486,27 @@ export default function Orders() {
         amount: itemAmount(it),
       }));
       const totalBottles = itemsWithAmount.reduce((s, it) => s + itemBottles(it), 0);
-      const totals = computeBillTotals(itemsWithAmount, modifyBill.has_gst);
+      const totals = computeBillTotals(itemsWithAmount, modifyHasGst);
 
-      await db.entities.Bill.update(modifyBill.id, {
-        items: itemsWithAmount,
-        subtotal: totals.subtotal,
-        tax_total: totals.tax,
-        total: totals.total,
-        modified_by_name: user?.email || "unknown",
-      });
-
-      const linkedDelivery = deliveries.find((d) => d.bill_id === modifyBill.id);
-      if (linkedDelivery) {
-        await db.entities.Delivery.update(linkedDelivery.id, {
+      // With a linked invoice: update the bill and its delivery too.
+      // Without one (order not dispatched yet): only the order is updated.
+      if (modifyBill) {
+        await db.entities.Bill.update(modifyBill.id, {
           items: itemsWithAmount,
-          total_bottles: totalBottles,
-          total_amount: totals.total,
+          subtotal: totals.subtotal,
+          tax_total: totals.tax,
+          total: totals.total,
+          modified_by_name: user?.email || "unknown",
         });
+
+        const linkedDelivery = deliveries.find((d) => d.bill_id === modifyBill.id);
+        if (linkedDelivery) {
+          await db.entities.Delivery.update(linkedDelivery.id, {
+            items: itemsWithAmount,
+            total_bottles: totalBottles,
+            total_amount: totals.total,
+          });
+        }
       }
 
       if (selected?.id) {
@@ -510,7 +518,7 @@ export default function Orders() {
         setSelected((prev) => (prev ? { ...prev, items: itemsWithAmount, total_bottles: totalBottles, total_amount: totals.total } : prev));
       }
 
-      toast({ title: "Invoice updated", description: `${modifyBill.invoice_number} — ${itemsWithAmount.length} item(s)` });
+      toast({ title: modifyBill ? "Invoice updated" : "Order updated", description: `${modifyBill ? modifyBill.invoice_number : selected.internal_invoice_number} — ${itemsWithAmount.length} item(s)` });
       setModifyOpen(false);
       load();
     } catch (e) {
@@ -520,26 +528,35 @@ export default function Orders() {
     }
   };
 
-  const exportPdfList = async () => {
-    const { jsPDF } = await import("jspdf");
-    const pdf = new jsPDF("p", "mm", "a4");
-    pdf.setFontSize(14);
-    pdf.text(`Orders: ${specificDate || `${from} to ${to}`}`, 14, 18);
-    pdf.setFontSize(9);
-    let y = 28;
-    pdf.text("Internal #", 14, y); pdf.text("Date", 50, y); pdf.text("Customer", 80, y); pdf.text("Status", 140, y); pdf.text("Bottles", 170, y);
-    y += 5;
-    filtered.forEach((o) => {
-      if (y > 285) { pdf.addPage(); y = 20; }
-      pdf.text(String(o.internal_invoice_number).slice(0, 16), 14, y);
-      pdf.text(String(o.order_date), 50, y);
-      pdf.text(String(o.customer_name || "").slice(0, 22), 80, y);
-      pdf.text(o.dispatch_status, 140, y);
-      pdf.text(String(o.total_bottles || 0), 170, y);
-      y += 5;
-    });
-    pdf.save(`orders_${specificDate || from}.pdf`);
+    // Delete: removes the order. If it was already dispatched, the linked
+  // invoice in Bill Entries is deleted too, along with its delivery and any
+  // crate-return entry synced from it.
+  const deleteOrder = async (o) => {
+    const bill = findOrderBill(o, bills);
+    let msg = `Delete order ${o.internal_invoice_number} (${o.display_name || o.customer_name})?`;
+    if (bill) {
+      msg += `\n\nThis will ALSO permanently delete invoice ${bill.invoice_number} from Bill Entries, together with its delivery and crate-return entries.`;
+      if (bill.delivery_status === "delivered") msg += "\nWarning: this invoice is already marked DELIVERED.";
+      if (bill.payment_status === "completed" || Number(bill.paid_amount) > 0) msg += "\nWarning: a payment is recorded on this invoice.";
+      msg += "\nThe invoice number will not be reused.";
+    }
+    msg += "\n\nThis cannot be undone.";
+    if (!confirm(msg)) return;
+    setBusy(true);
+    try {
+      await deleteOrderCascade(o, bills, deliveries);
+      toast({ title: "Order deleted", description: bill ? `${o.internal_invoice_number} and invoice ${bill.invoice_number}` : o.internal_invoice_number });
+      setSelected(null);
+      setSelectedIds((p) => { const n = new Set(p); n.delete(o.id); return n; });
+      load();
+    } catch (e) {
+      toast({ variant: "destructive", title: "Could not delete", description: e.message });
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const exportPdfList = async () => {
 
   return (
     <PageShell
@@ -648,11 +665,12 @@ export default function Orders() {
                 <Button disabled={busy} variant={selected.dispatch_status === "dispatched" ? "default" : "outline"} onClick={() => dispatch(selected)}>
                   <Truck className="h-4 w-4 mr-2" /> {selected.dispatch_status === "dispatched" ? "Unmark Dispatch" : "Mark Dispatched"}
                 </Button>
-                {(selected.bill_id || selected.dispatch_status === "dispatched") && (
-                  <Button variant="outline" onClick={() => openModify(selected)}>
-                    <Pencil className="h-4 w-4 mr-2" /> Modify
-                  </Button>
-                )}
+                <Button variant="outline" onClick={() => openModify(selected)}>
+                  <Pencil className="h-4 w-4 mr-2" /> Modify
+                </Button>
+                <Button variant="destructive" disabled={busy} onClick={() => deleteOrder(selected)}>
+                  <Trash2 className="h-4 w-4 mr-2" /> Delete
+                </Button>
               </div>
             </div>
           )}
@@ -662,10 +680,15 @@ export default function Orders() {
       {/* Modify: edit the linked invoice's line items directly from Orders */}
       <Dialog open={modifyOpen} onOpenChange={(o) => !o && setModifyOpen(false)}>
         <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle>Modify Invoice {modifyBill?.invoice_number}</DialogTitle></DialogHeader>
-          {modifyBill && (
-            <div className="max-h-[65vh] space-y-4 overflow-y-auto">
-              {modifyBill.delivery_status === "delivered" && (
+        <DialogHeader><DialogTitle>{modifyBill ? `Modify Invoice ${modifyBill.invoice_number}` : `Modify Order ${selected?.internal_invoice_number || ""}`}</DialogTitle></DialogHeader>
+          {modifyOpen && (
+              <div className="max-h-[65vh] space-y-4 overflow-y-auto">
+              {!modifyBill && (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-2 text-xs text-primary">
+                  This order hasn't been dispatched yet, so there is no invoice. Your changes update the order and will be used when it is dispatched.
+                </div>
+              )}
+              {modifyBill?.delivery_status === "delivered" && (
                 <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700">
                   This invoice is already marked delivered — you can still edit it, but you may want to reprint it for the customer afterwards.
                 </div>
@@ -710,7 +733,7 @@ export default function Orders() {
 
               <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
                 <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>₹ {modifyTotals.subtotal.toFixed(2)}</span></div>
-                {modifyBill.has_gst && <div className="flex justify-between"><span className="text-muted-foreground">Tax</span><span>₹ {modifyTotals.tax.toFixed(2)}</span></div>}
+                {modifyHasGst && <div className="flex justify-between"><span className="text-muted-foreground">Tax</span><span>₹ {modifyTotals.tax.toFixed(2)}</span></div>}
                 <div className="flex justify-between border-t border-primary/20 pt-2 text-base font-bold text-primary"><span>Total</span><span>₹ {modifyTotals.total.toFixed(2)}</span></div>
               </div>
 
