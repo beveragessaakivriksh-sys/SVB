@@ -3,11 +3,10 @@ import { db } from "@/api/db";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import PageShell from "@/components/PageShell";
-import HotelCombobox from "@/components/HotelCombobox";
 import { Stepper } from "@/components/Stepper";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
-import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItemsFromProductList, sortCustomersAlpha } from "@/lib/billUtils";
+import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItemsFromProductList } from "@/lib/billUtils";
 import { useProducts } from "@/lib/useProducts";
 import { nextInvoiceNumber } from "@/lib/invoiceSeries";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
@@ -15,6 +14,7 @@ import { findOrderBill, deleteOrderCascade } from "@/lib/deleteOrder";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ListChecks, Truck, FileDown, Pencil, Printer, Copy, Trash2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
@@ -42,40 +42,23 @@ export default function Orders() {
   const summaryRef = useRef(null);
 
   const load = async () => {
-    // When a hotel is picked, fetch ALL of that hotel's orders / invoices /
-    // deliveries (every date) instead of only the most recent ones, so older
-    // invoices can be viewed, modified or deleted as well.
-    if (filterCustomer !== "all") {
-      const q = { customer_id: filterCustomer };
-      setOrders(await db.entities.Order.filter(q, "-order_date", 1000));
-      setBills(await db.entities.Bill.filter(q, "-invoice_date", 1000));
-      setDeliveries(await db.entities.Delivery.filter(q, "-delivery_date", 1000));
-    } else {
-      setOrders(await db.entities.Order.list("-order_date", 500));
-      setBills(await db.entities.Bill.list("-invoice_date", 500));
-      setDeliveries(await db.entities.Delivery.list("-delivery_date", 500));
-    }
+    setOrders(await db.entities.Order.list("-order_date", 500));
     setCustomers(await db.entities.Customer.list());
+    setBills(await db.entities.Bill.list("-invoice_date", 500));
+    setDeliveries(await db.entities.Delivery.list("-delivery_date", 500));
   };
-  useEffect(() => { load(); }, [filterCustomer]);
+  useEffect(() => { load(); }, []);
 
   const customersById = useMemo(() => Object.fromEntries(customers.map((c) => [c.id, c])), [customers]);
 
-  const hotelSelected = filterCustomer !== "all";
-  const hotelOptions = useMemo(() => sortCustomersAlpha(customers), [customers]);
-
   const filtered = useMemo(() => {
-    const list = orders.filter((o) => {
-      // A hotel picked from the dropdown shows ALL of its orders, every date.
-      if (hotelSelected) return o.customer_id === filterCustomer;
-      if (specificDate) return o.order_date === specificDate;
-      return o.order_date >= from && o.order_date <= to;
+    return orders.filter((o) => {
+      if (specificDate) { if (o.order_date !== specificDate) return false; }
+      else { if (o.order_date < from || o.order_date > to) return false; }
+      if (filterCustomer !== "all" && o.customer_id !== filterCustomer) return false;
+      return true;
     });
-    // Newest first — today at the top, then going back in time.
-    return [...list].sort(
-      (a, b) => (b.order_date || "").localeCompare(a.order_date || "") || (b.created_at || "").localeCompare(a.created_at || "")
-    );
-  }, [orders, specificDate, from, to, filterCustomer, hotelSelected]);
+  }, [orders, specificDate, from, to, filterCustomer]);
 
   const toggleOrder = (id, e) => { e.stopPropagation(); setSelectedIds((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const toggleAll = () => setSelectedIds((p) => (p.size === filtered.length ? new Set() : new Set(filtered.map((o) => o.id))));
@@ -577,9 +560,7 @@ export default function Orders() {
     const { jsPDF } = await import("jspdf");
     const pdf = new jsPDF("p", "mm", "a4");
     pdf.setFontSize(14);
-    const pdfHotel = customersById[filterCustomer];
-    const pdfRange = hotelSelected ? `${pdfHotel?.display_name || pdfHotel?.customer_name || "Hotel"} — all dates` : (specificDate || `${from} to ${to}`);
-    pdf.text(`Orders: ${pdfRange}`, 14, 18);
+    pdf.text(`Orders: ${specificDate || `${from} to ${to}`}`, 14, 18);
     pdf.setFontSize(9);
     let y = 28;
     pdf.text("Internal #", 14, y); pdf.text("Date", 50, y); pdf.text("Customer", 80, y); pdf.text("Status", 140, y); pdf.text("Bottles", 170, y);
@@ -609,13 +590,18 @@ export default function Orders() {
       }
     >
       <div className="mb-4 grid gap-3 rounded-xl border border-primary/20 bg-white p-4 sm:grid-cols-4">
-        <div><Label>Specific Date</Label><Input type="date" value={specificDate} onChange={(e) => setSpecificDate(e.target.value)} disabled={hotelSelected} /></div>
-        <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate || hotelSelected} /></div>
-        <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate || hotelSelected} /></div>
+        <div><Label>Specific Date</Label><Input type="date" value={specificDate} onChange={(e) => setSpecificDate(e.target.value)} /></div>
+        <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate} /></div>
+        <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate} /></div>
         <div>
           <Label>Hotel</Label>
-          <HotelCombobox customers={hotelOptions} value={filterCustomer} onChange={setFilterCustomer} />
-          {hotelSelected && <p className="mt-1 text-[11px] text-muted-foreground">Showing all dates, newest first. Choose "All hotels" to filter by date.</p>}
+          <Select value={filterCustomer} onValueChange={setFilterCustomer}>
+            <SelectTrigger><SelectValue placeholder="All hotels" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All hotels</SelectItem>
+              {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.customer_name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
