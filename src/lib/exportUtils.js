@@ -147,6 +147,15 @@ export function buildGstZohoRows(bill, customer) {
     ...PAYMENT_FLAGS,
   };
 
+  // Invoice total = every item's cost + its GST, added up for the WHOLE bill.
+  // It goes in the "Total" column (W) of every item row of this invoice.
+  const invoiceTotal = +(bill.items || []).reduce((sum, item) => {
+    const t = Number(item.amount) || 0;
+    const cg = +(CGST_RATE * t / 100).toFixed(2);
+    const sg = +(SGST_RATE * t / 100).toFixed(2);
+    return sum + t + cg + sg;
+  }, 0).toFixed(2);
+
   (bill.items || []).forEach((item) => {
     const itemTotal = item.amount || 0;
     const cgst = +(CGST_RATE * itemTotal / 100).toFixed(2);
@@ -162,9 +171,8 @@ export function buildGstZohoRows(bill, customer) {
     row["SGST(FCY)"] = sgst;
     row["CGST"] = cgst;
     row["SGST"] = sgst;
-    const itemTaxAmount = +(cgst + sgst).toFixed(2);
-    row["Item Tax Amount"] = itemTaxAmount;
-    row["Total"] = +(itemTotal + itemTaxAmount).toFixed(2);
+    row["Item Tax Amount"] = +(cgst + sgst).toFixed(2);
+    row["Total"] = invoiceTotal;
     rows.push(GST_ZOHO_COLUMNS.map((c) => row[c] ?? ""));
   });
   return rows;
