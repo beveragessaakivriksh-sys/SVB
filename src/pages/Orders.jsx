@@ -3,18 +3,19 @@ import { db } from "@/api/db";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import PageShell from "@/components/PageShell";
+import HotelCombobox from "@/components/HotelCombobox";
 import { Stepper } from "@/components/Stepper";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
-import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItemsFromProductList } from "@/lib/billUtils";
+import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItemsFromProductList, sortCustomersAlpha } from "@/lib/billUtils";
 import { useProducts } from "@/lib/useProducts";
 import { nextInvoiceNumber } from "@/lib/invoiceSeries";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
+import { buildOrdersSummaryPdf } from "@/lib/summaryPdf";
 import { findOrderBill, deleteOrderCascade } from "@/lib/deleteOrder";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ListChecks, Truck, FileDown, Pencil, Printer, Copy, Trash2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
@@ -42,23 +43,40 @@ export default function Orders() {
   const summaryRef = useRef(null);
 
   const load = async () => {
-    setOrders(await db.entities.Order.list("-order_date", 500));
+    // When a hotel is picked, fetch ALL of that hotel's orders / invoices /
+    // deliveries (every date) instead of only the most recent ones, so older
+    // invoices can be viewed, modified or deleted as well.
+    if (filterCustomer !== "all") {
+      const q = { customer_id: filterCustomer };
+      setOrders(await db.entities.Order.filter(q, "-order_date", 1000));
+      setBills(await db.entities.Bill.filter(q, "-invoice_date", 1000));
+      setDeliveries(await db.entities.Delivery.filter(q, "-delivery_date", 1000));
+    } else {
+      setOrders(await db.entities.Order.list("-order_date", 500));
+      setBills(await db.entities.Bill.list("-invoice_date", 500));
+      setDeliveries(await db.entities.Delivery.list("-delivery_date", 500));
+    }
     setCustomers(await db.entities.Customer.list());
-    setBills(await db.entities.Bill.list("-invoice_date", 500));
-    setDeliveries(await db.entities.Delivery.list("-delivery_date", 500));
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [filterCustomer]);
 
   const customersById = useMemo(() => Object.fromEntries(customers.map((c) => [c.id, c])), [customers]);
 
+  const hotelSelected = filterCustomer !== "all";
+  const hotelOptions = useMemo(() => sortCustomersAlpha(customers), [customers]);
+
   const filtered = useMemo(() => {
-    return orders.filter((o) => {
-      if (specificDate) { if (o.order_date !== specificDate) return false; }
-      else { if (o.order_date < from || o.order_date > to) return false; }
-      if (filterCustomer !== "all" && o.customer_id !== filterCustomer) return false;
-      return true;
+    const list = orders.filter((o) => {
+      // A hotel picked from the dropdown shows ALL of its orders, every date.
+      if (hotelSelected) return o.customer_id === filterCustomer;
+      if (specificDate) return o.order_date === specificDate;
+      return o.order_date >= from && o.order_date <= to;
     });
-  }, [orders, specificDate, from, to, filterCustomer]);
+    // Newest first — today at the top, then going back in time.
+    return [...list].sort(
+      (a, b) => (b.order_date || "").localeCompare(a.order_date || "") || (b.created_at || "").localeCompare(a.created_at || "")
+    );
+  }, [orders, specificDate, from, to, filterCustomer, hotelSelected]);
 
   const toggleOrder = (id, e) => { e.stopPropagation(); setSelectedIds((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const toggleAll = () => setSelectedIds((p) => (p.size === filtered.length ? new Set() : new Set(filtered.map((o) => o.id))));
@@ -170,121 +188,21 @@ export default function Orders() {
     if (summaryOrders.length === 0) return toast({ variant: "destructive", title: "Select orders to summarize" });
     try {
       const { jsPDF } = await import("jspdf");
-      const pdf = new jsPDF("p", "mm", "a4");
-      pdf.setFontSize(14);
-      pdf.text(`Order Summary — ${todayISO()}`, 14, 16);
-      pdf.setFontSize(9);
-      let y = 24;
-
-      // Per-category tables: Crates (Cr) and Loose (Lo) per flavour, plus a
-      // Total column per hotel and an overall category grand total.
-      // Gridlines: bold black header rule + outer border, thin light-gray
-      // rules between hotels, and a bold rule separating hotels from the
-      // totals row — plus a vertical divider at every column boundary.
-      categories.forEach((cat) => {
-        const hotels = Object.entries(groupedSummary[cat] || {});
-        if (hotels.length === 0) return;
-        const flavs = flavoursByCategory(cat);
-        const totalX = 90 + flavs.length * 14;
-        const rightEdge = totalX + 14;
-        const colXs = [14, 70, ...flavs.map((_, i) => 90 + i * 14), totalX, rightEdge];
-
-        const boldRule = (yy) => { pdf.setDrawColor(0); pdf.setLineWidth(0.4); pdf.line(14, yy, rightEdge, yy); };
-        const lightRule = (yy) => { pdf.setDrawColor(205); pdf.setLineWidth(0.1); pdf.line(14, yy, rightEdge, yy); };
-        const resetLine = () => { pdf.setDrawColor(0); pdf.setLineWidth(0.2); };
-
-        if (y > 270) { pdf.addPage(); y = 20; }
-        pdf.setFont("helvetica", "bold");
-        pdf.text(cat, 14, y); y += 5;
-        pdf.setFont("helvetica", "normal");
-
-        let sectionTop = y - 3;
-        boldRule(sectionTop);
-
-        pdf.setFontSize(7);
-        pdf.text("Hotel", 14, y);
-        pdf.setFontSize(9);
-        pdf.text("MRP", 70, y);
-        flavs.forEach((fl, i) => pdf.text(String(fl).slice(0, 6), 90 + i * 14, y));
-        pdf.text("Total", totalX, y);
-        y += 4;
-        flavs.forEach((fl, i) => {
-          const x = 90 + i * 14;
-          pdf.text("Cr", x, y); pdf.text("Lo", x + 7, y);
-        });
-        pdf.text("Cr", totalX, y); pdf.text("Lo", totalX + 7, y);
-        y += 2;
-        boldRule(y);
-        y += 3;
-
-        hotels.forEach(([hotel, h], idx) => {
-          if (y > 285) {
-            resetLine();
-            colXs.forEach((x) => pdf.line(x, sectionTop, x, y - 1));
-            pdf.addPage();
-            y = 20;
-            sectionTop = y - 2;
-          }
-          pdf.setFontSize(7);
-          pdf.text(String(hotel), 14, y);
-          pdf.setFontSize(9);
-          pdf.text(`Rs. ${Number(h.mrp || 0).toFixed(0)}`, 70, y);
-          flavs.forEach((fl, i) => {
-            const x = 90 + i * 14;
-            const p = h.products[fl];
-            pdf.text(p ? String(Number(p.crates) || 0) : "-", x, y);
-            pdf.text(p ? String(Number(p.loose) || 0) : "-", x + 7, y);
-          });
-          const rt = hotelRowTotal(h);
-          pdf.setFont("helvetica", "bold");
-          pdf.text(String(rt.crates), totalX, y);
-          pdf.text(String(rt.loose), totalX + 7, y);
-          pdf.setFont("helvetica", "normal");
-          y += 1.8;
-          if (idx < hotels.length - 1) lightRule(y);
-          y += 1.8;
-        });
-
-        // bold rule separating the hotel list from the totals row
-        boldRule(y);
-        y += 3;
-
-        if (y > 285) {
-          resetLine();
-          colXs.forEach((x) => pdf.line(x, sectionTop, x, y - 4));
-          pdf.addPage();
-          y = 20;
-          sectionTop = y - 2;
-          boldRule(y - 1);
-        }
-        pdf.setFont("helvetica", "bold");
-        pdf.text("Total Cr/Lo", 14, y);
-        flavs.forEach((fl, i) => {
-          const x = 90 + i * 14;
-          const t = flavourTotals[cat]?.[fl] || { crates: 0, loose: 0 };
-          pdf.text(String(t.crates), x, y);
-          pdf.text(String(t.loose), x + 7, y);
-        });
-        const gt = categoryGrandTotal(cat);
-        pdf.text(String(gt.crates), totalX, y);
-        pdf.text(String(gt.loose), totalX + 7, y);
-        pdf.setFont("helvetica", "normal");
-        y += 3;
-        boldRule(y);
-
-        // outer border + vertical column dividers for this table (or its
-        // final page segment, if it spilled across a page break)
-        pdf.setDrawColor(0);
-        pdf.setLineWidth(0.4);
-        colXs.forEach((x) => pdf.line(x, sectionTop, x, y));
-        resetLine();
-
-        y += 6;
+      // Landscape A4, everything at twice the old size. If there are more
+      // hotels than fit, the table continues on the next page (header repeated)
+      // — nothing is squeezed. Layout lives in src/lib/summaryPdf.js.
+      const pdf = new jsPDF("l", "mm", "a4");
+      buildOrdersSummaryPdf(pdf, {
+        title: `Order Summary — ${todayISO()}`,
+        categories,
+        flavoursByCategory,
+        groupedSummary,
+        flavourTotals,
       });
 
-            if (mode === "print") {
+      if (mode === "print") {
         printPdfDirect(pdf);
-        toast({ title: "Opening print dialog (A4)" });
+        toast({ title: "Opening print dialog (A4 landscape)" });
         return;
       }
       pdf.save(`orders_summary_${todayISO()}.pdf`);
@@ -560,7 +478,9 @@ export default function Orders() {
     const { jsPDF } = await import("jspdf");
     const pdf = new jsPDF("p", "mm", "a4");
     pdf.setFontSize(14);
-    pdf.text(`Orders: ${specificDate || `${from} to ${to}`}`, 14, 18);
+    const pdfHotel = customersById[filterCustomer];
+    const pdfRange = hotelSelected ? `${pdfHotel?.display_name || pdfHotel?.customer_name || "Hotel"} — all dates` : (specificDate || `${from} to ${to}`);
+    pdf.text(`Orders: ${pdfRange}`, 14, 18);
     pdf.setFontSize(9);
     let y = 28;
     pdf.text("Internal #", 14, y); pdf.text("Date", 50, y); pdf.text("Customer", 80, y); pdf.text("Status", 140, y); pdf.text("Bottles", 170, y);
@@ -590,18 +510,13 @@ export default function Orders() {
       }
     >
       <div className="mb-4 grid gap-3 rounded-xl border border-primary/20 bg-white p-4 sm:grid-cols-4">
-        <div><Label>Specific Date</Label><Input type="date" value={specificDate} onChange={(e) => setSpecificDate(e.target.value)} /></div>
-        <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate} /></div>
-        <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate} /></div>
+        <div><Label>Specific Date</Label><Input type="date" value={specificDate} onChange={(e) => setSpecificDate(e.target.value)} disabled={hotelSelected} /></div>
+        <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate || hotelSelected} /></div>
+        <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate || hotelSelected} /></div>
         <div>
           <Label>Hotel</Label>
-          <Select value={filterCustomer} onValueChange={setFilterCustomer}>
-            <SelectTrigger><SelectValue placeholder="All hotels" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All hotels</SelectItem>
-              {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.customer_name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <HotelCombobox customers={hotelOptions} value={filterCustomer} onChange={setFilterCustomer} />
+          {hotelSelected && <p className="mt-1 text-[11px] text-muted-foreground">Showing all dates, newest first. Choose "All hotels" to filter by date.</p>}
         </div>
       </div>
 
