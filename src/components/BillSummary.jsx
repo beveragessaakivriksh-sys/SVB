@@ -1,8 +1,6 @@
 import { useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Download, FileDown, Printer } from "lucide-react";
-import { todayISO } from "@/lib/constants";
-import { buildBillSummaryPdf, printPdfDirect } from "@/lib/summaryPdf";
+import { Download } from "lucide-react";
 
 export default function BillSummary({ bills }) {
   const tableRef = useRef(null);
@@ -42,27 +40,6 @@ export default function BillSummary({ bills }) {
     link.click();
   };
 
-  // Landscape A4 printout at twice the size; continues on the next page when
-  // there are more hotels / products than fit (layout in src/lib/summaryPdf.js).
-  const makePdf = async (mode) => {
-    try {
-      const { jsPDF } = await import("jspdf");
-      const pdf = new jsPDF("l", "mm", "a4");
-      buildBillSummaryPdf(pdf, {
-        title: "SVB — Production Crates Summary",
-        subtitle: `Total crates per hotel & flavour · ${bills.length} bills · ${todayISO()}`,
-        hotels,
-        products,
-        matrix,
-        totals,
-      });
-      if (mode === "print") printPdfDirect(pdf);
-      else pdf.save(`production_summary_${todayISO()}.pdf`);
-    } catch (e) {
-      alert(`Could not create the PDF: ${e.message}`);
-    }
-  };
-
   if (hotels.length === 0) {
     return <div className="py-6 text-center text-sm text-muted-foreground">No items to summarize.</div>;
   }
@@ -74,11 +51,7 @@ export default function BillSummary({ bills }) {
           <h3 className="text-sm font-semibold text-primary">Production Summary</h3>
           <p className="text-xs text-muted-foreground">Total crates per hotel &amp; flavour · {bills.length} bills</p>
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={() => makePdf("print")}><Printer className="h-4 w-4 mr-2" /> Print (A4)</Button>
-          <Button size="sm" variant="outline" onClick={() => makePdf("save")}><FileDown className="h-4 w-4 mr-2" /> Save as PDF</Button>
-          <Button size="sm" onClick={downloadImage}><Download className="h-4 w-4 mr-2" /> Download as Image</Button>
-        </div>
+        <Button size="sm" onClick={downloadImage}><Download className="h-4 w-4 mr-2" /> Download as Image</Button>
       </div>
       <div ref={tableRef} className="overflow-x-auto rounded-xl border border-primary/20 bg-white p-4">
         <div className="mb-2 text-sm font-bold text-primary">SVB — Production Crates Summary</div>
