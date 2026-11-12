@@ -193,7 +193,7 @@ export function buildNonGstRows(bill, customer) {
     rows.push([
       bill.invoice_number,
       date,
-      "Approved",
+      "Overdue",
       bill.customer_name || customer?.customer_name,
       bill.gst_treatment || customer?.gst_treatment || "",
       bill.place_of_supply || customer?.place_of_supply || "",
