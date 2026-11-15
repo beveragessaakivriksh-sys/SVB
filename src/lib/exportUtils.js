@@ -1,4 +1,4 @@
-import { SUPPLIER, BANK_NOTES, TERMS_GST, TERMS_NON_GST, CGST_RATE, SGST_RATE, HSN_SAC } from "./constants";
+import { SUPPLIER, BANK_NOTES, TERMS_GST, TERMS_NON_GST, CGST_RATE, SGST_RATE, HSN_SAC, bottlesPerCrate } from "./constants";
 
 const FALSE = "FALSE";
 const NO = "NO";
@@ -61,7 +61,9 @@ export function downloadCsv(columns, rows, filename) {
 }
 
 function itemTotalBottles(item) {
-  return (item.crates || 0) * 24 + (item.loose || 0);
+  const crates = Number(item.crates) || 0;
+  const loose = Number(item.loose) || 0;
+  return crates * bottlesPerCrate(item.category) + loose;
 }
 
 export function buildGstZohoRows(bill, customer) {

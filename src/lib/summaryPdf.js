@@ -1,25 +1,26 @@
 // Shared renderer for the landscape summary printouts (Orders summary and the
 // Bill Entries production summary).
 //
-// Everything is drawn at TWICE the size of the old portrait summary — fonts,
+// Everything is drawn at 1.5× the size of the old portrait summary — fonts,
 // row heights, line weights — and is never squeezed to fit: when there are
 // more hotels than fit on a page the table continues on the next page (with
 // its header repeated), and when there are more flavours / products than fit
 // across the page width the extra columns continue in a further table.
 
-const S = 2; // size multiplier versus the old portrait summary
+const S = 1.5; // size multiplier versus the old portrait summary
 
 export const SUMMARY_SCALE = S;
 export const PAGE_MARGIN = 10;
 
-const BODY_FS = 9 * S;        // 18pt  numbers, headers, totals
-const LEAD_FS = 7 * S;        // 14pt  hotel names
-const HEAD_FS = 9 * S;        // 18pt  category / table headings
-const BODY_STEP = 7.4;        // mm between lines of 18pt text
-const LEAD_STEP = 6.2;        // mm between lines of 14pt text
-const BOLD_LINE = 0.4 * S;    // 0.8mm
-const LIGHT_LINE = 0.1 * S;   // 0.2mm
-const SUB_W = 7 * S;          // 14mm per Cr / Lo sub-column
+const BODY_FS = 9 * S;        // 13.5pt  numbers, headers, totals
+const LEAD_FS = 7 * S;        // 10.5pt  hotel names
+const HEAD_FS = 9 * S;        // 13.5pt  category / table headings
+const BODY_STEP = 5.6;        // mm between lines of 13.5pt text
+const LEAD_STEP = 4.8;        // mm between lines of 10.5pt text
+const BOLD_LINE = 0.4 * S;    // 0.6mm
+const LIGHT_LINE = 0.1 * S;   // 0.15mm
+const SUB_W = 7 * S;          // 10.5mm per Cr / Lo sub-column
+const MIN_ROW_H = 5 * S;      // 7.5mm minimum row height
 
 export const SUMMARY_FONT_SIZES = { title: 14 * S, body: BODY_FS, lead: LEAD_FS };
 
@@ -84,17 +85,17 @@ export function renderGridTable(pdf, spec, startY) {
     return pdf.splitTextToSize(String(str), w);
   };
 
-  // ---- column widths (never narrower than the doubled size needs)
+  // ---- column widths (never narrower than the 1.5× size needs)
   // (the footer label is drawn bold, so it is measured bold)
   const nameW = Math.max(
     width(lead[0].header, LEAD_FS),
     ...rows.map((r) => width(r.lead[0], LEAD_FS)),
     footer ? width(footer.lead[0], LEAD_FS, "bold") : 0
   );
-  const leadW = [Math.min(72, Math.max(56, nameW + 6))];
+  const leadW = [Math.min(64, Math.max(48, nameW + 5))];
   for (let k = 1; k < lead.length; k++) {
     const vals = rows.map((r) => r.lead[k] ?? "").concat(footer ? [footer.lead[k] ?? ""] : []);
-    leadW.push(Math.max(26, width(lead[k].header, BODY_FS) + 6, ...vals.map((v) => width(v, BODY_FS) + 6)));
+    leadW.push(Math.max(20, width(lead[k].header, BODY_FS) + 5, ...vals.map((v) => width(v, BODY_FS) + 5)));
   }
   // width of a data column = its header's widest word, or its widest number
   // (bold, since totals are bold) plus padding — whichever is larger.
@@ -134,7 +135,7 @@ export function renderGridTable(pdf, spec, startY) {
 
   const rowHeight = (r, bold = false) => {
     const k = wrap(r.lead[0], leadW[0] - 5, LEAD_FS, bold ? "bold" : "normal").length;
-    return Math.max(10, k * LEAD_STEP + 3.8);
+    return Math.max(MIN_ROW_H, k * LEAD_STEP + 3.2);
   };
 
   let y = startY;
@@ -159,8 +160,8 @@ export function renderGridTable(pdf, spec, startY) {
     });
     const maxHeadLines = Math.max(1, ...headLines.map((l) => l.length));
     const anySubs = allHeaders.some((g) => subsOf(g));
-    const row1H = maxHeadLines * BODY_STEP + 3;
-    const row2H = anySubs ? 9 : 0;
+    const row1H = maxHeadLines * BODY_STEP + 2.6;
+    const row2H = anySubs ? 6.5 : 0;
     const headH = row1H + row2H;
 
     const heading = spec.title
@@ -251,14 +252,14 @@ export function renderGridTable(pdf, spec, startY) {
       if (isLast && total) put(total, r.total, xs[lead.length + groups.length], xs[lead.length + groups.length + 1], true);
     };
 
-    // Keep a table together when it can: if it doesn't fit in the space left
-    // on this page but WOULD fit on a fresh one, start it on a new page. A
-    // table taller than a whole page just flows across pages (header repeated).
-    const bodyH = rows.reduce((a, r) => a + rowHeight(r), 0) + (footer ? Math.max(10, rowHeight(footer, true)) : 0);
-    const wholeH = (heading ? 10 : 0) + headH + bodyH + 2;
-    const firstH = rows.length ? rowHeight(rows[0]) : 10;
-    const fitsOnFreshPage = wholeH <= bottom - M;
-    if (y > M + 0.5 && (fitsOnFreshPage ? y + wholeH > bottom : y + (heading ? 10 : 0) + headH + firstH > bottom)) {
+    // Avoid orphaned table starts: if the heading, header and first row don't
+    // fit in the space left, move the table to a fresh page. Once started, a
+    // table flows onto the next page with its header repeated. This keeps
+    // normal summaries to one or two pages instead of one page per category.
+    const firstH = rows.length ? rowHeight(rows[0]) : MIN_ROW_H;
+    const footerH = footer ? Math.max(MIN_ROW_H, rowHeight(footer, true)) : 0;
+    const minChunkH = (heading ? 10 : 0) + headH + firstH + footerH;
+    if (y > M + 0.5 && y + minChunkH > bottom) {
       pdf.addPage();
       y = M;
     }
@@ -279,7 +280,7 @@ export function renderGridTable(pdf, spec, startY) {
     });
 
     if (footer) {
-      const fh = Math.max(10, rowHeight(footer, true));
+      const fh = Math.max(MIN_ROW_H, rowHeight(footer, true));
       if (y + fh > bottom) {
         endSegment();
         pdf.addPage();

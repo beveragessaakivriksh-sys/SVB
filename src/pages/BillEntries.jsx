@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Download, Printer, Copy, Pencil, FileDown, Eye, Truck, PackageCheck, ListChecks, Save, AlertTriangle, History } from "lucide-react";
+import { Download, Printer, Copy, Pencil, FileDown, PackageCheck, ListChecks, Save, AlertTriangle, History } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
 export default function BillEntries() {
@@ -514,7 +514,7 @@ export default function BillEntries() {
 
       {/* Summary dialog */}
       <Dialog open={showSummary} onOpenChange={setShowSummary}>
-        <DialogContent className="max-w-4xl">
+        <DialogContent className="max-w-6xl">
           <DialogHeader><DialogTitle>Production Summary</DialogTitle></DialogHeader>
           <BillSummary bills={summaryBills} />
         </DialogContent>

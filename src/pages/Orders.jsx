@@ -11,7 +11,7 @@ import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItems
 import { useProducts } from "@/lib/useProducts";
 import { nextInvoiceNumber } from "@/lib/invoiceSeries";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
-import { buildOrdersSummaryPdf } from "@/lib/summaryPdf";
+import { buildOrdersSummaryPdf, printPdfDirect } from "@/lib/summaryPdf";
 import { findOrderBill, deleteOrderCascade } from "@/lib/deleteOrder";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -159,38 +159,14 @@ export default function Orders() {
     );
   };
 
-    // Opens the browser's print dialog for a jsPDF document (A4), using a
-  // hidden iframe so it prints directly without needing to save first.
-  const printPdfDirect = (pdf) => {
-    const url = pdf.output("bloburl");
-    const iframe = document.createElement("iframe");
-    iframe.style.position = "fixed";
-    iframe.style.right = "0";
-    iframe.style.bottom = "0";
-    iframe.style.width = "0";
-    iframe.style.height = "0";
-    iframe.style.border = "0";
-    iframe.src = url;
-    iframe.onload = () => {
-      try {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-      } catch {
-        // fallback: open the PDF in a new tab so it can be printed from there
-        window.open(url, "_blank");
-      }
-    };
-    document.body.appendChild(iframe);
-    setTimeout(() => { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); }, 60000);
-  };
-
   const saveSummaryPdf = async (mode = "save") => {
     if (summaryOrders.length === 0) return toast({ variant: "destructive", title: "Select orders to summarize" });
     try {
       const { jsPDF } = await import("jspdf");
-      // Landscape A4, everything at twice the old size. If there are more
-      // hotels than fit, the table continues on the next page (header repeated)
-      // — nothing is squeezed. Layout lives in src/lib/summaryPdf.js.
+      // Landscape A4, everything at 1.5× the old portrait size. The table
+      // stays on one page where it fits and continues on a second page when
+      // the selected rows/columns overflow — nothing is squeezed.
+      // Layout lives in src/lib/summaryPdf.js.
       const pdf = new jsPDF("l", "mm", "a4");
       buildOrdersSummaryPdf(pdf, {
         title: `Order Summary — ${todayISO()}`,
@@ -206,7 +182,7 @@ export default function Orders() {
         return;
       }
       pdf.save(`orders_summary_${todayISO()}.pdf`);
-      toast({ title: "Summary saved as PDF" });
+      toast({ title: "Summary saved as PDF", description: "A4 landscape · 1.5× print size" });
     } catch (e) {
       toast({ variant: "destructive", title: "Could not save PDF", description: e.message });
     }
@@ -681,12 +657,17 @@ export default function Orders() {
 
       {/* Grouped summary */}
       <Dialog open={showSummary} onOpenChange={setShowSummary}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="max-w-6xl">
           <DialogHeader>
-            <div className="flex items-center justify-between gap-2 pr-8">
-              <DialogTitle>Order Summary — by hotel & flavour</DialogTitle>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => saveSummaryPdf("print")}><Printer className="h-4 w-4 mr-1" /> Print (A4)</Button>
+            <div className="flex flex-wrap items-start justify-between gap-2 pr-8">
+              <div>
+                <DialogTitle>Order Summary — by hotel &amp; flavour</DialogTitle>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Print layout: A4 landscape, everything at 1.5× — one page where it fits, otherwise it flows onto a second page.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => saveSummaryPdf("print")}><Printer className="h-4 w-4 mr-1" /> Print (A4 landscape)</Button>
                 <Button variant="outline" size="sm" onClick={() => saveSummaryPdf("save")}><FileDown className="h-4 w-4 mr-1" /> Save as PDF</Button>
               </div>
             </div>
