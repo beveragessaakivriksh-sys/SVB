@@ -98,22 +98,6 @@ export default function BillEntries() {
     }));
     return [...customerOptions, ...distributorOptions, ...hotelOptions];
   }, [customers, distributors, distributorHotels, distributorsById]);
-  const distributorsById = useMemo(() => Object.fromEntries(distributors.map((d) => [d.id, d])), [distributors]);
-  const distributorHotelsById = useMemo(() => Object.fromEntries(distributorHotels.map((h) => [h.id, h])), [distributorHotels]);
-  const partyOf = (bill) => resolveParty(bill, customersById, distributorsById, distributorHotelsById);
-
-  const partyOptions = useMemo(() => {
-    const customerOptions = sortCustomersAlpha(customers).map((c) => ({ ...c, title: c.display_name || c.customer_name }));
-    const distributorOptions = sortPartiesAlpha(distributors).map((d) => ({
-      ...d,
-      title: (d.display_name || d.distributor_name) + " (Distributor)",
-    }));
-    const hotelOptions = sortPartiesAlpha(distributorHotels).map((h) => ({
-      ...h,
-      title: partyDisplayName(h) + " - " + (partyDisplayName(distributorsById[h.distributor_id]) || "Distributor"),
-    }));
-    return [...customerOptions, ...distributorOptions, ...hotelOptions];
-  }, [customers, distributors, distributorHotels, distributorsById]);
 
   // Pending (unpaid) bills for the customer of the bill being viewed — warning banner.
   const pendingForCustomer = useMemo(() => {
