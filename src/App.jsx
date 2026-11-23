@@ -23,6 +23,8 @@ import Dashboard from '@/pages/Dashboard';
 import DailyProduction from '@/pages/DailyProduction';
 import DataAnalytics from '@/pages/DataAnalytics';
 import Customers from '@/pages/Customers';
+import Distributors from '@/pages/Distributors';
+import DistributorIncomingOrders from '@/pages/DistributorIncomingOrders';
 import Settings from '@/pages/Settings';
 import LocationTracking from '@/pages/LocationTracking';
 import Orders from '@/pages/Orders';
@@ -54,6 +56,7 @@ const AuthenticatedApp = () => {
         <Route element={<Layout />}>
           <Route path="/" element={<DailySummaryPage />} />
           <Route path="/new-delivery" element={<NewDelivery />} />
+          <Route path="/distributor-incoming-orders" element={<DistributorIncomingOrders />} />
           <Route path="/bill-entries" element={<BillEntries />} />
           <Route path="/crates-entries" element={<CratesEntries />} />
           <Route path="/orders" element={<Orders />} />
@@ -62,6 +65,7 @@ const AuthenticatedApp = () => {
           <Route path="/daily-production" element={<DailyProduction />} />
           <Route path="/data-analytics" element={<DataAnalytics />} />
           <Route path="/customers" element={<AdminRoute><Customers /></AdminRoute>} />
+          <Route path="/distributors" element={<AdminRoute><Distributors /></AdminRoute>} />
           <Route path="/location-tracking" element={<AdminRoute><LocationTracking /></AdminRoute>} />
           <Route path="/settings" element={<AdminRoute><Settings /></AdminRoute>} />
         </Route>

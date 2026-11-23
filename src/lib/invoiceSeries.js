@@ -1,6 +1,5 @@
 import { db } from "@/api/db";
 
-
 import { padNumber } from "./billUtils";
 
 // Default fallback series used when no active series exists for a bill type.
@@ -10,6 +9,9 @@ export const DEFAULT_SERIES = {
   // Internal series: numbers the internal orders created in Incoming Orders.
   // The real (GST / Non-GST) invoice number is only taken at dispatch.
   internal: { type: "internal", prefix: "INT-", series_name: "Internal Series", next_number: 1, padding: 4 },
+  // Distributor series: the real invoice number assigned when a distributor
+  // order is dispatched from the Orders tab.
+  distributor: { type: "distributor", prefix: "DST-", series_name: "Distributors Invoice Number", next_number: 1001, padding: 4 },
 };
 
 // Returns the active series for a bill type, or null.
@@ -36,11 +38,18 @@ export async function nextInvoiceNumber(hasGst) {
   return { number, seriesName: ser.series_name };
 }
 
-// Generates the next INTERNAL order number (used by Incoming Orders). Same
-// logic as nextInvoiceNumber, but on the separate "internal" series, so
-// creating an order does not use up a real invoice number.
+// Generates the next INTERNAL order number (used by Incoming Orders).
 export async function nextInternalNumber() {
   const ser = await ensureInvoiceSeries("internal");
+  const number = `${ser.prefix}${padNumber(ser.next_number, ser.padding)}`;
+  await db.entities.InvoiceSeries.update(ser.id, { next_number: (Number(ser.next_number) || 0) + 1 });
+  return { number, seriesName: ser.series_name };
+}
+
+// Generates the next DISTRIBUTOR invoice number. Used when a distributor
+// order is dispatched from Orders and moves into Bill Entries.
+export async function nextDistributorInvoiceNumber() {
+  const ser = await ensureInvoiceSeries("distributor");
   const number = `${ser.prefix}${padNumber(ser.next_number, ser.padding)}`;
   await db.entities.InvoiceSeries.update(ser.id, { next_number: (Number(ser.next_number) || 0) + 1 });
   return { number, seriesName: ser.series_name };

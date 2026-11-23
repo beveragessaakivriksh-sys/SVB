@@ -336,12 +336,21 @@ export function buildDemandForecast(rawOrders, options = {}) {
   const ordersModel = fitSeries(ordersSeries, dates, { halfLife: 45 });
   const bottlesModel = fitSeries(bottlesSeries, dates, { halfLife: 45 });
 
+  // With a targetDate the model forecasts just that one calendar day (chosen
+  // from the Analysis date picker). Without it, the default is the next 7 days.
+  const targetDate = options.targetDate ? String(options.targetDate).slice(0, 10) : null;
+  const forecastDates = targetDate
+    ? [targetDate]
+    : Array.from({ length: 7 }, (_, index) => addDaysISO(lastDate, index + 1));
+
   const forecastDays = [];
   let forecastOrders = 0;
   let forecastBottles = 0;
 
-  for (let horizon = 1; horizon <= 7; horizon += 1) {
-    const date = addDaysISO(lastDate, horizon);
+  forecastDates.forEach((date, index) => {
+    const horizon = targetDate
+      ? Math.max(1, dayNumber(date) - dayNumber(lastDate))
+      : index + 1;
     const predictedBottles = round(bottlesModel.predict(horizon, date));
     let predictedOrders = round(ordersModel.predict(horizon, date));
     if (predictedBottles > 0 && predictedOrders === 0) predictedOrders = 1;
@@ -352,11 +361,12 @@ export function buildDemandForecast(rawOrders, options = {}) {
     forecastDays.push({
       date,
       weekday: weekdayLabel(date),
+      label: shortDayLabel(date),
       orders: predictedOrders,
       bottles: predictedBottles,
       expected: predictedBottles,
     });
-  }
+  });
 
   const busiestDay = forecastDays.reduce(
     (best, day) => (!best || day.bottles > best.bottles ? day : best),
@@ -405,11 +415,13 @@ export function buildDemandForecast(rawOrders, options = {}) {
 
     let bottles = 0;
     let flavourOrders = 0;
-    for (let horizon = 1; horizon <= 7; horizon += 1) {
-      const date = addDaysISO(lastDate, horizon);
+    forecastDates.forEach((date, index) => {
+      const horizon = targetDate
+        ? Math.max(1, dayNumber(date) - dayNumber(lastDate))
+        : index + 1;
       bottles += bottleModel.predict(horizon, date);
       flavourOrders += orderModel.predict(horizon, date);
-    }
+    });
 
     return {
       key,
@@ -592,7 +604,7 @@ export function buildDemandForecast(rawOrders, options = {}) {
     )} active day(s), ${firstDate} to ${lastDate}.`
   );
   summaryLines.push(
-    `Next 7 days: ~${forecastOrders.toLocaleString("en-IN")} orders and ~${forecastBottles.toLocaleString(
+    `${targetDate ? `Forecast for ${targetDate}` : "Next 7 days"}: ~${forecastOrders.toLocaleString("en-IN")} orders and ~${forecastBottles.toLocaleString(
       "en-IN"
     )} bottles.`
   );
@@ -636,6 +648,7 @@ export function buildDemandForecast(rawOrders, options = {}) {
 
   return {
     ok: true,
+    targetDate,
     daily,
     historyChart,
     forecastDays,

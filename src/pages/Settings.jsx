@@ -7,6 +7,7 @@ import PageShell from "@/components/PageShell";
 import { CATEGORIES, FLAVOURS } from "@/lib/constants";
 import { padNumber } from "@/lib/billUtils";
 import { DEFAULT_SERIES } from "@/lib/invoiceSeries";
+import { sortPartiesAlpha } from "@/lib/partyUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,21 +16,26 @@ import { Switch } from "@/components/ui/switch";
 import { Plus, Trash2, Save, Database, Pencil, Check, X } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
-const SERIES_LABELS = { gst: "GST Customers", non_gst: "Non-GST Customers", internal: "Internal Orders (Incoming Orders)" };
-const SERIES_SHORT = { gst: "GST", non_gst: "Non-GST", internal: "Internal" };
+const SERIES_LABELS = { gst: "GST Customers", non_gst: "Non-GST Customers", internal: "Internal Orders (Incoming Orders)", distributor: "Distributors Invoice Number" };
+const SERIES_SHORT = { gst: "GST", non_gst: "Non-GST", internal: "Internal", distributor: "Distributors" };
 
 export default function Settings() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
+  const [distributors, setDistributors] = useState([]);
   const [series, setSeries] = useState([]);
   const [drafts, setDrafts] = useState({});
   const [newProd, setNewProd] = useState({ category: "Goli Fizz", flavour: "" });
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState({ category: "Goli Fizz", flavour: "" });
+  const [newDistName, setNewDistName] = useState("");
+  const [editingDistId, setEditingDistId] = useState(null);
+  const [editDistName, setEditDistName] = useState("");
 
   const load = async () => {
     setProducts(await db.entities.Product.list());
+    setDistributors(sortPartiesAlpha(await db.entities.Distributor.list()));
     const s = await db.entities.InvoiceSeries.list();
     setSeries(s);
     setDrafts(Object.fromEntries(s.map((x) => [x.id, {
@@ -80,6 +86,59 @@ export default function Settings() {
     load();
   };
 
+  // Distributor names are managed here just like products. Full GST, address,
+  // pricing and hotel details live in the Distributors tab.
+  const addDistributor = async () => {
+    const name = (newDistName || "").trim();
+    if (!name) return toast({ variant: "destructive", title: "Enter a distributor name" });
+    if (distributors.some((d) => (d.distributor_name || "").toLowerCase() === name.toLowerCase())) {
+      return toast({ variant: "destructive", title: "Distributor already exists" });
+    }
+    try {
+      await db.entities.Distributor.create({ distributor_name: name, display_name: name });
+      toast({ title: "Distributor added", description: name });
+      setNewDistName("");
+      load();
+    } catch (e) {
+      toast({ variant: "destructive", title: "Error", description: e.message });
+    }
+  };
+
+  const startEditDist = (d) => { setEditingDistId(d.id); setEditDistName(d.distributor_name || ""); };
+  const cancelEditDist = () => { setEditingDistId(null); setEditDistName(""); };
+
+  const saveEditDist = async () => {
+    const name = (editDistName || "").trim();
+    if (!name) return toast({ variant: "destructive", title: "Distributor name required" });
+    const d = distributors.find((x) => x.id === editingDistId);
+    if (!d) return cancelEditDist();
+    if (d.distributor_name === name) return cancelEditDist();
+    if (distributors.some((x) => x.id !== d.id && (x.distributor_name || "").toLowerCase() === name.toLowerCase())) {
+      return toast({ variant: "destructive", title: "Another distributor already uses that name" });
+    }
+    try {
+      await db.entities.Distributor.update(d.id, {
+        distributor_name: name,
+        display_name: d.display_name === d.distributor_name ? name : d.display_name,
+      });
+      toast({ title: "Distributor updated", description: name });
+      cancelEditDist();
+      load();
+    } catch (e) {
+      toast({ variant: "destructive", title: "Error", description: e.message });
+    }
+  };
+
+  const removeDist = async (d) => {
+    if (!confirm("Delete " + d.distributor_name + "? Its hotels, orders and bills will also be removed.")) return;
+    try {
+      await db.entities.Distributor.delete(d.id);
+      toast({ title: "Distributor deleted" });
+      load();
+    } catch (e) {
+      toast({ variant: "destructive", title: "Error", description: e.message });
+    }
+  };
   const setDraft = (id, field, value) => {
     setDrafts((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   };
@@ -177,10 +236,43 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Distributor names */}
+        <div className="rounded-xl border border-border bg-card p-4">
+          <h3 className="mb-1 text-sm font-semibold">Distributor Names</h3>
+          <p className="mb-3 text-[11px] text-muted-foreground">Type a name to add it. GST, address, pricing and the hotels under each distributor are managed in the Distributors tab.</p>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <Input className="w-56" placeholder="Distributor name" value={newDistName} onChange={(e) => setNewDistName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addDistributor(); } }} />
+            <Button onClick={addDistributor}><Plus className="h-4 w-4 mr-1" /> Add</Button>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {distributors.map((d) => (
+              <div key={d.id} className="flex items-center justify-between border-t border-border py-2 text-sm">
+                {editingDistId === d.id ? (
+                  <div className="flex flex-1 items-center gap-2">
+                    <Input className="h-8 w-56" value={editDistName} onChange={(e) => setEditDistName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveEditDist(); if (e.key === "Escape") cancelEditDist(); }} />
+                    <div className="flex items-center gap-1">
+                      <Button size="icon" className="h-8 w-8" onClick={saveEditDist}><Check className="h-4 w-4" /></Button>
+                      <Button size="icon" variant="ghost" className="h-8 w-8" onClick={cancelEditDist}><X className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <span>{d.distributor_name}</span>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => startEditDist(d)} className="text-muted-foreground hover:text-primary" title="Modify"><Pencil className="h-4 w-4" /></button>
+                      <button onClick={() => removeDist(d)} className="text-muted-foreground hover:text-destructive" title="Delete"><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+            {distributors.length === 0 && <div className="py-4 text-center text-sm text-muted-foreground">No distributors yet â€” add your first above.</div>}
+          </div>
+        </div>
         {/* Invoice Series */}
         <div className="rounded-xl border border-border bg-card p-4">
           <h3 className="mb-1 text-sm font-semibold">Invoice Series</h3>
-          <p className="mb-3 text-[11px] text-muted-foreground">Set the invoice prefix and current bill number. The counter auto-increments on each new bill. The Internal series numbers the orders created in Incoming Orders; the GST / Non-GST series number is taken when an order is dispatched.</p>
+          <p className="mb-3 text-[11px] text-muted-foreground">Set the invoice prefix and current bill number. The counter auto-increments on each new bill. The Internal series numbers the orders created in Incoming Orders; the GST / Non-GST series number is taken when a customer order is dispatched, and the Distributors Invoice Number series is taken when a distributor order is dispatched.</p>
           {series.map((s) => {
             const d = drafts[s.id] || { prefix: s.prefix, series_name: s.series_name, next_number: s.next_number, padding: s.padding };
             return (
@@ -200,7 +292,7 @@ export default function Settings() {
             );
           })}
           <div className="flex flex-wrap gap-2">
-            {["gst", "non_gst", "internal"].filter((t) => !series.some((s) => s.type === t)).map((t) => (
+            {["gst", "non_gst", "internal", "distributor"].filter((t) => !series.some((s) => s.type === t)).map((t) => (
               <Button key={t} size="sm" variant="outline" onClick={() => addSeries(t)}>
                 <Plus className="h-4 w-4 mr-1" /> Add {SERIES_SHORT[t]} series ({DEFAULT_SERIES[t].prefix}{DEFAULT_SERIES[t].next_number})
               </Button>
@@ -212,7 +304,7 @@ export default function Settings() {
         <div className="rounded-xl border border-border bg-card p-4 lg:col-span-2">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Database className="h-4 w-4" /> Data Management</h3>
           <div className="flex flex-wrap gap-2">
-            {["Bill", "Delivery", "CrateEntry", "DailyProduction", "Customer", "Product", "InvoiceSeries", "Order", "DailySummary"].map((e) => (
+            {["Bill", "Delivery", "CrateEntry", "DailyProduction", "Customer", "Distributor", "Product", "InvoiceSeries", "Order", "DailySummary"].map((e) => (
               <Button key={e} variant="outline" onClick={() => clearData(e)}><Trash2 className="h-4 w-4 mr-2" /> Clear {e}</Button>
             ))}
           </div>

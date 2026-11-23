@@ -117,7 +117,7 @@ export function buildInvoiceHtml(bill, customer, { duplicate = false } = {}) {
   <div class="grid">
     <div class="panel">
       <div style="font-weight:700;margin-bottom:4px">Bill To</div>
-      <div style="font-weight:700;font-size:14px">${bill.customer_name || customer?.customer_name}</div>
+      <div style="font-weight:700;font-size:14px">${bill.customer_name || customer?.customer_name || customer?.hotel_name || customer?.distributor_name}</div>
       <div style="font-size:12px">${billTo}</div>
     </div>
     <div class="panel">

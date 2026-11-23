@@ -4,7 +4,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
-import { FileText, Package, LayoutDashboard, Factory, BarChart3, Users, Settings, LogOut, CalendarClock, ClipboardList, Inbox, Radio, MapPin, AlertTriangle, X } from "lucide-react";
+import { FileText, Package, LayoutDashboard, Factory, BarChart3, Users, Settings, LogOut, CalendarClock, ClipboardList, Inbox, Radio, MapPin, AlertTriangle, X, Building2 } from "lucide-react";
 import { startPeriodicTracking, stopPeriodicTracking, checkLocationPermission, requestLocationPermission } from "@/lib/locationService";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,12 @@ const ALL_TABS = [
   { to: "/crates-entries", label: "Crates", icon: Package, roles: ["admin", "user"] },
   { to: "/orders", label: "Orders", icon: ClipboardList, roles: ["admin", "user"] },
   { to: "/new-delivery", label: "Incoming Orders", icon: Inbox, roles: ["admin", "user"] },
+  { to: "/distributor-incoming-orders", label: "Distributor Incoming Orders", icon: Inbox, roles: ["admin", "user"] },
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin"] },
   { to: "/daily-production", label: "Production", icon: Factory, roles: ["admin"] },
   { to: "/data-analytics", label: "Analysis", icon: BarChart3, roles: ["admin"] },
   { to: "/customers", label: "Customers", icon: Users, roles: ["admin"] },
+  { to: "/distributors", label: "Distributors", icon: Building2, roles: ["admin"] },
   { to: "/location-tracking", label: "Tracking", icon: Radio, roles: ["admin"] },
   { to: "/settings", label: "Settings", icon: Settings, roles: ["admin"] },
 ];

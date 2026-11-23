@@ -9,7 +9,8 @@ import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
 import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItemsFromProductList, sortCustomersAlpha } from "@/lib/billUtils";
 import { useProducts } from "@/lib/useProducts";
-import { nextInvoiceNumber } from "@/lib/invoiceSeries";
+import { nextInvoiceNumber, nextDistributorInvoiceNumber } from "@/lib/invoiceSeries";
+import { isDistributorParty, partyDisplayName, partyName, resolveParty, sortPartiesAlpha } from "@/lib/partyUtils";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
 import { buildOrdersSummaryPdf, printPdfDirect } from "@/lib/summaryPdf";
 import { findOrderBill, deleteOrderCascade } from "@/lib/deleteOrder";
@@ -20,14 +21,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { ListChecks, Truck, FileDown, Pencil, Printer, Copy, Trash2 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
-export default function Orders() {
+// One independent Orders section. The page renders two of these — customer
+// orders and distributor orders — so each has its own filters, selection,
+// summary, clone, dispatch, modify, delete and PDF options.
+function OrderSection({ kind, orders, bills, deliveries, customersById, distributorsById, distributorHotelsById, partyOptions, load, categories, flavoursByCategory, productList }) {
   const user = useCurrentUser();
   const { toast } = useToast();
-  const { categories, flavoursByCategory, productList } = useProducts();
-  const [orders, setOrders] = useState([]);
-  const [customers, setCustomers] = useState([]);
-  const [bills, setBills] = useState([]);
-  const [deliveries, setDeliveries] = useState([]);
   const [specificDate, setSpecificDate] = useState("");
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
@@ -42,33 +41,19 @@ export default function Orders() {
   const [modifySaving, setModifySaving] = useState(false);
   const summaryRef = useRef(null);
 
-  const load = async () => {
-    // When a hotel is picked, fetch ALL of that hotel's orders / invoices /
-    // deliveries (every date) instead of only the most recent ones, so older
-    // invoices can be viewed, modified or deleted as well.
-    if (filterCustomer !== "all") {
-      const q = { customer_id: filterCustomer };
-      setOrders(await db.entities.Order.filter(q, "-order_date", 1000));
-      setBills(await db.entities.Bill.filter(q, "-invoice_date", 1000));
-      setDeliveries(await db.entities.Delivery.filter(q, "-delivery_date", 1000));
-    } else {
-      setOrders(await db.entities.Order.list("-order_date", 500));
-      setBills(await db.entities.Bill.list("-invoice_date", 500));
-      setDeliveries(await db.entities.Delivery.list("-delivery_date", 500));
-    }
-    setCustomers(await db.entities.Customer.list());
-  };
-  useEffect(() => { load(); }, [filterCustomer]);
+  const isDistributorSection = kind === "distributor";
+  const partyOf = (order) => resolveParty(order, customersById, distributorsById, distributorHotelsById);
 
-  const customersById = useMemo(() => Object.fromEntries(customers.map((c) => [c.id, c])), [customers]);
+  const sectionOrders = useMemo(
+    () => orders.filter((o) => isDistributorParty(o) === isDistributorSection),
+    [orders, isDistributorSection]
+  );
 
-  const hotelSelected = filterCustomer !== "all";
-  const hotelOptions = useMemo(() => sortCustomersAlpha(customers), [customers]);
-
+  const partySelected = filterCustomer !== "all";
   const filtered = useMemo(() => {
-    const list = orders.filter((o) => {
-      // A hotel picked from the dropdown shows ALL of its orders, every date.
-      if (hotelSelected) return o.customer_id === filterCustomer;
+    const list = sectionOrders.filter((o) => {
+      // A party picked from the dropdown shows ALL of its orders, every date.
+      if (partySelected) return o.customer_id === filterCustomer || o.distributor_id === filterCustomer || o.distributor_hotel_id === filterCustomer;
       if (specificDate) return o.order_date === specificDate;
       return o.order_date >= from && o.order_date <= to;
     });
@@ -76,7 +61,7 @@ export default function Orders() {
     return [...list].sort(
       (a, b) => (b.order_date || "").localeCompare(a.order_date || "") || (b.created_at || "").localeCompare(a.created_at || "")
     );
-  }, [orders, specificDate, from, to, filterCustomer, hotelSelected]);
+  }, [sectionOrders, specificDate, from, to, filterCustomer, partySelected]);
 
   const toggleOrder = (id, e) => { e.stopPropagation(); setSelectedIds((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const toggleAll = () => setSelectedIds((p) => (p.size === filtered.length ? new Set() : new Set(filtered.map((o) => o.id))));
@@ -84,18 +69,18 @@ export default function Orders() {
   const summaryOrders = filtered.filter((o) => selectedIds.has(o.id));
   const openSummary = () => { if (selectedIds.size === 0) return toast({ variant: "destructive", title: "Select orders to summarize" }); setShowSummary(true); };
 
-  // Grouped summary: category -> hotel -> product {crates, loose, mrp}
+  // Grouped summary: category -> party -> product {crates, loose, mrp}
   const groupedSummary = useMemo(() => {
     const g = {};
     categories.forEach((cat) => (g[cat] = {}));
     summaryOrders.forEach((o) => {
-      const hotel = o.display_name || o.customer_name || "Unknown";
-      const cust = customersById[o.customer_id];
+      const hotel = o.display_name || partyDisplayName(partyOf(o)) || "Unknown";
+      const party = partyOf(o);
       (o.items || []).forEach((it) => {
         if (!g[it.category]) g[it.category] = {};
         if (!g[it.category][hotel]) {
           const mrpField = it.category === "Goli Fizz" ? "goli_fizz_mrp" : it.category === "Goli Blast" ? "goli_blast_mrp" : "petbottle_mrp";
-          g[it.category][hotel] = { mrp: Number(cust?.[mrpField]) || 0, products: {} };
+          g[it.category][hotel] = { mrp: Number(party?.[mrpField]) || 0, products: {} };
         }
         const p = g[it.category][hotel].products[it.flavour] || { crates: 0, loose: 0 };
         p.crates += Number(it.crates) || 0;
@@ -104,24 +89,22 @@ export default function Orders() {
       });
     });
     return g;
-  }, [summaryOrders, customersById, categories]);
+  }, [summaryOrders, customersById, distributorsById, distributorHotelsById, categories]);
 
-  // Per-hotel MRP summary: Goli Fizz / Goli Blast / Petbottle MRP for each hotel.
-  const hotelMrpRows = useMemo(() => {
+  // Per-party MRP summary: Goli Fizz / Goli Blast / Petbottle MRP for each party.
+  const partyMrpRows = useMemo(() => {
     const map = {};
     summaryOrders.forEach((o) => {
-      const hotel = o.display_name || o.customer_name || "Unknown";
-      const cust = customersById[o.customer_id];
+      const hotel = o.display_name || partyDisplayName(partyOf(o)) || "Unknown";
+      const party = partyOf(o);
       if (!map[hotel]) map[hotel] = { goli_fizz: 0, goli_blast: 0, petbottle: 0 };
-      map[hotel].goli_fizz = Math.max(map[hotel].goli_fizz, Number(cust?.goli_fizz_mrp) || 0);
-      map[hotel].goli_blast = Math.max(map[hotel].goli_blast, Number(cust?.goli_blast_mrp) || 0);
-      map[hotel].petbottle = Math.max(map[hotel].petbottle, Number(cust?.petbottle_mrp) || 0);
+      map[hotel].goli_fizz = Math.max(map[hotel].goli_fizz, Number(party?.goli_fizz_mrp) || 0);
+      map[hotel].goli_blast = Math.max(map[hotel].goli_blast, Number(party?.goli_blast_mrp) || 0);
+      map[hotel].petbottle = Math.max(map[hotel].petbottle, Number(party?.petbottle_mrp) || 0);
     });
     return Object.entries(map);
-  }, [summaryOrders, customersById]);
+  }, [summaryOrders, customersById, distributorsById, distributorHotelsById]);
 
-  // Total crates & loose bottles per flavour within each category
-  // (across all selected hotels) — matches the summary's Crates / Loose columns.
   const flavourTotals = useMemo(() => {
     const out = {};
     categories.forEach((cat) => {
@@ -139,9 +122,7 @@ export default function Orders() {
     return out;
   }, [groupedSummary, categories]);
 
-  // Sum across all flavours for one hotel within a category — e.g. a
-  // hotel ordering 2 crates Jeera + 1 crate Ginger shows "3" crates total.
-  const hotelRowTotal = (h) => {
+  const partyRowTotal = (h) => {
     let crates = 0, loose = 0;
     Object.values(h.products || {}).forEach((p) => {
       crates += Number(p.crates) || 0;
@@ -150,8 +131,6 @@ export default function Orders() {
     return { crates, loose };
   };
 
-  // Grand total for a whole category (Goli Fizz / Goli Blast / Petbottle) —
-  // sum of every flavour's total within that category, across all hotels.
   const categoryGrandTotal = (cat) => {
     return Object.values(flavourTotals[cat] || {}).reduce(
       (acc, t) => ({ crates: acc.crates + t.crates, loose: acc.loose + t.loose }),
@@ -166,10 +145,9 @@ export default function Orders() {
       // Landscape A4, everything at 1.5× the old portrait size. The table
       // stays on one page where it fits and continues on a second page when
       // the selected rows/columns overflow — nothing is squeezed.
-      // Layout lives in src/lib/summaryPdf.js.
       const pdf = new jsPDF("l", "mm", "a4");
       buildOrdersSummaryPdf(pdf, {
-        title: `Order Summary — ${todayISO()}`,
+        title: `${isDistributorSection ? "Distributor" : "Customer"} Order Summary — ${todayISO()}`,
         categories,
         flavoursByCategory,
         groupedSummary,
@@ -181,14 +159,13 @@ export default function Orders() {
         toast({ title: "Opening print dialog (A4 landscape)" });
         return;
       }
-      pdf.save(`orders_summary_${todayISO()}.pdf`);
+      pdf.save(`${isDistributorSection ? "distributor" : "customer"}_orders_summary_${todayISO()}.pdf`);
       toast({ title: "Summary saved as PDF", description: "A4 landscape · 1.5× print size" });
     } catch (e) {
       toast({ variant: "destructive", title: "Could not save PDF", description: e.message });
     }
   };
-  // Clone: copies the selected (checked) orders into NEW pending orders dated
-  // today — same hotel and items, today's prices, fresh internal number.
+
   const cloneSelectedToToday = async () => {
     if (summaryOrders.length === 0) return toast({ variant: "destructive", title: "Select orders to clone" });
     if (!confirm(`Create ${summaryOrders.length} new order(s) for today (${todayISO()}) from the selected order(s)?`)) return;
@@ -196,12 +173,12 @@ export default function Orders() {
     try {
       let made = 0;
       for (const o of summaryOrders) {
-        const customer = customersById[o.customer_id];
-        if (!customer) {
-          toast({ variant: "destructive", title: `Skipped ${o.internal_invoice_number}`, description: "Its customer no longer exists." });
+        const party = partyOf(o);
+        if (!party) {
+          toast({ variant: "destructive", title: `Skipped ${o.internal_invoice_number}`, description: "Its customer/distributor/hotel no longer exists." });
           continue;
         }
-        await cloneToTodayOrder({ customer, items: o.items, user });
+        await cloneToTodayOrder({ customer: party, items: o.items, user });
         made += 1;
       }
       if (made > 0) {
@@ -222,7 +199,12 @@ export default function Orders() {
   const dispatch = async (o) => {
     if (o.dispatch_status === "dispatched") {
       // unmark
-      if (o.has_gst && o.bill_id) {
+      const distributorOrder = isDistributorParty(o);
+      // Legacy GST customer invoices were created at incoming time, so
+      // un-dispatching only clears the dispatch flag and keeps the bill.
+      // Distributor invoices are always created at dispatch time, so they
+      // are deleted here (and recreated with the same number on re-dispatch).
+      if (o.has_gst && o.bill_id && !distributorOrder) {
         const bill = bills.find((b) => b.id === o.bill_id);
         if (bill?.delivery_status === "delivered") return toast({ variant: "destructive", title: "Cannot unmark — bill already delivered" });
         await db.entities.Bill.update(o.bill_id, { dispatch_status: "pending", dispatch_date: null, modified_by_name: user?.email || "unknown" });
@@ -239,8 +221,8 @@ export default function Orders() {
         const dl = deliveries.find((d) => d.bill_id === o.bill_id);
         if (dl) await db.entities.Delivery.delete(dl.id).catch(() => {});
       }
-      await db.entities.Order.update(o.id, { dispatch_status: "pending", dispatched_date: null, bill_id: o.has_gst ? o.bill_id : null });
-      setSelected({ ...o, dispatch_status: "pending", dispatched_date: null });
+      await db.entities.Order.update(o.id, { dispatch_status: "pending", dispatched_date: null, bill_id: null });
+      setSelected({ ...o, dispatch_status: "pending", dispatched_date: null, bill_id: null });
       toast({ title: "Dispatch unmarked" });
       load();
       return;
@@ -257,48 +239,51 @@ export default function Orders() {
         load();
         return;
       }
-      // Create the bill + delivery now (GST and Non-GST). The real invoice
-      // number comes from the normal GST / Non-GST series at this point.
-      // Orders that already carry a number (older orders, or a re-dispatch
-      // after an unmark) keep it, so no number is used up twice.
+      // Customer orders use the normal GST / Non-GST series; distributor
+      // orders use the dedicated Distributors Invoice Number series.
+      const distributorOrder = isDistributorParty(o);
+      const party = partyOf(o);
       let invoiceNo = o.invoice_number;
       let seriesName = o.invoice_series;
       if (!invoiceNo) {
-        const next = await nextInvoiceNumber(o.has_gst);
+        const next = distributorOrder ? await nextDistributorInvoiceNumber() : await nextInvoiceNumber(o.has_gst);
         invoiceNo = next.number;
         seriesName = next.seriesName;
       }
-      const customer = customersById[o.customer_id];
-      const rateOf = (it) => Number(it.rate) || getProductPrice(customer, it.category, it.flavour);
+      const rateOf = (it) => Number(it.rate) || getProductPrice(party, it.category, it.flavour);
       const items = (o.items || []).map((it) => ({ ...it, rate: rateOf(it), amount: itemAmount({ ...it, rate: rateOf(it) }) }));
       const totals = computeBillTotals(items, o.has_gst);
+      const partyTitle = o.customer_name || partyName(party);
       const billData = {
         has_gst: o.has_gst,
         invoice_number: invoiceNo,
         invoice_series: seriesName,
         invoice_date: date,
         due_date: date,
-        customer_id: o.customer_id,
-        customer_name: o.customer_name,
-        place_of_supply: customer?.place_of_supply,
-        place_of_supply_state_code: customer?.place_of_supply_state_code,
-        gst_treatment: customer?.gst_treatment,
-        gstin: customer?.gstin,
-        billing_attention: customer?.billing_attention,
-        billing_address: customer?.billing_address,
-        billing_street2: customer?.billing_street2,
-        billing_city: customer?.billing_city,
-        billing_state: customer?.billing_state,
-        billing_country: customer?.billing_country,
-        billing_code: customer?.billing_code,
-        shipping_attention: customer?.shipping_attention,
-        shipping_address: customer?.shipping_address,
-        shipping_street2: customer?.shipping_street2,
-        shipping_city: customer?.shipping_city,
-        shipping_state: customer?.shipping_state,
-        shipping_country: customer?.shipping_country,
-        shipping_code: customer?.shipping_code,
-        payment_terms_label: customer?.payment_terms_label || "Due on Receipt",
+        customer_id: distributorOrder ? null : o.customer_id,
+        distributor_id: distributorOrder ? o.distributor_id : null,
+        distributor_hotel_id: distributorOrder ? o.distributor_hotel_id : null,
+        party_type: distributorOrder ? "distributor" : "customer",
+        customer_name: partyTitle,
+        place_of_supply: party?.place_of_supply,
+        place_of_supply_state_code: party?.place_of_supply_state_code,
+        gst_treatment: party?.gst_treatment,
+        gstin: party?.gstin,
+        billing_attention: party?.billing_attention,
+        billing_address: party?.billing_address,
+        billing_street2: party?.billing_street2,
+        billing_city: party?.billing_city,
+        billing_state: party?.billing_state,
+        billing_country: party?.billing_country,
+        billing_code: party?.billing_code,
+        shipping_attention: party?.shipping_attention,
+        shipping_address: party?.shipping_address,
+        shipping_street2: party?.shipping_street2,
+        shipping_city: party?.shipping_city,
+        shipping_state: party?.shipping_state,
+        shipping_country: party?.shipping_country,
+        shipping_code: party?.shipping_code,
+        payment_terms_label: party?.payment_terms_label || "Due on Receipt",
         items,
         subtotal: totals.subtotal,
         tax_total: totals.tax,
@@ -315,8 +300,11 @@ export default function Orders() {
       };
       const bill = await db.entities.Bill.create(billData);
       const delivery = await db.entities.Delivery.create({
-        customer_id: o.customer_id,
-        customer_name: o.customer_name,
+        customer_id: distributorOrder ? null : o.customer_id,
+        distributor_id: distributorOrder ? o.distributor_id : null,
+        distributor_hotel_id: distributorOrder ? o.distributor_hotel_id : null,
+        party_type: distributorOrder ? "distributor" : "customer",
+        customer_name: partyTitle,
         delivery_date: date,
         payment_status: "pending",
         items,
@@ -337,19 +325,13 @@ export default function Orders() {
     }
   };
 
-  // Modify: lets any signed-in user (not just admins) edit the actual
-  // invoice line items after an order has been dispatched — opens the
-  // linked Bill for editing directly from the Orders tab, instead of
-  // having to separately find it in Bill Entries.
   const openModify = (o) => {
-    // A dispatched order has a linked invoice (bill) — edit that. An order that
-    // has not been dispatched yet has no bill, so edit the order itself.
     const bill = findOrderBill(o, bills);
-    const customer = customersById[o.customer_id];
+    const party = partyOf(o);
     const source = bill ? bill.items : o.items;
     const merged = buildItemsFromProductList(productList).map((p) => {
       const existing = (source || []).find((x) => x.category === p.category && x.flavour === p.flavour);
-      return existing ? { ...p, ...existing } : { ...p, rate: getProductPrice(customer, p.category, p.flavour) };
+      return existing ? { ...p, ...existing } : { ...p, rate: getProductPrice(party, p.category, p.flavour) };
     });
     setModifyBill(bill || null);
     setModifyItems(merged);
@@ -382,8 +364,6 @@ export default function Orders() {
       const totalBottles = itemsWithAmount.reduce((s, it) => s + itemBottles(it), 0);
       const totals = computeBillTotals(itemsWithAmount, modifyHasGst);
 
-      // With a linked invoice: update the bill and its delivery too.
-      // Without one (order not dispatched yet): only the order is updated.
       if (modifyBill) {
         await db.entities.Bill.update(modifyBill.id, {
           items: itemsWithAmount,
@@ -422,9 +402,6 @@ export default function Orders() {
     }
   };
 
-  // Delete: removes the order. If it was already dispatched, the linked
-  // invoice in Bill Entries is deleted too, along with its delivery and any
-  // crate-return entry synced from it.
   const deleteOrder = async (o) => {
     const bill = findOrderBill(o, bills);
     let msg = `Delete order ${o.internal_invoice_number} (${o.display_name || o.customer_name})?`;
@@ -454,12 +431,12 @@ export default function Orders() {
     const { jsPDF } = await import("jspdf");
     const pdf = new jsPDF("p", "mm", "a4");
     pdf.setFontSize(14);
-    const pdfHotel = customersById[filterCustomer];
-    const pdfRange = hotelSelected ? `${pdfHotel?.display_name || pdfHotel?.customer_name || "Hotel"} — all dates` : (specificDate || `${from} to ${to}`);
-    pdf.text(`Orders: ${pdfRange}`, 14, 18);
+    const pdfParty = customersById[filterCustomer] || distributorsById[filterCustomer] || distributorHotelsById[filterCustomer];
+    const pdfRange = partySelected ? `${partyDisplayName(pdfParty) || "Party"} — all dates` : (specificDate || `${from} to ${to}`);
+    pdf.text(`${isDistributorSection ? "Distributor" : "Customer"} Orders: ${pdfRange}`, 14, 18);
     pdf.setFontSize(9);
     let y = 28;
-    pdf.text("Internal #", 14, y); pdf.text("Date", 50, y); pdf.text("Customer", 80, y); pdf.text("Status", 140, y); pdf.text("Bottles", 170, y);
+    pdf.text("Internal #", 14, y); pdf.text("Date", 50, y); pdf.text("Party", 80, y); pdf.text("Status", 140, y); pdf.text("Bottles", 170, y);
     y += 5;
     filtered.forEach((o) => {
       if (y > 285) { pdf.addPage(); y = 20; }
@@ -470,29 +447,43 @@ export default function Orders() {
       pdf.text(String(o.total_bottles || 0), 170, y);
       y += 5;
     });
-    pdf.save(`orders_${specificDate || from}.pdf`);
+    pdf.save(`${isDistributorSection ? "distributor" : "customer"}_orders_${specificDate || from}.pdf`);
   };
 
   return (
-    <PageShell
-      title="Orders"
-      subtitle="Internal invoices — review, summarize and dispatch to create the actual bill"
-      actions={
-        <>
-          <Button variant="outline" disabled={busy} onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today</Button>
-          <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
-          <Button onClick={openSummary}><ListChecks className="h-4 w-4 mr-2" /> Summary</Button>
-        </>
-      }
-    >
-      <div className="mb-4 grid gap-3 rounded-xl border border-primary/20 bg-white p-4 sm:grid-cols-4">
-        <div><Label>Specific Date</Label><Input type="date" value={specificDate} onChange={(e) => setSpecificDate(e.target.value)} disabled={hotelSelected} /></div>
-        <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate || hotelSelected} /></div>
-        <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate || hotelSelected} /></div>
-        <div>
-          <Label>Hotel</Label>
-          <HotelCombobox customers={hotelOptions} value={filterCustomer} onChange={setFilterCustomer} />
-          {hotelSelected && <p className="mt-1 text-[11px] text-muted-foreground">Showing all dates, newest first. Choose "All hotels" to filter by date.</p>}
+    <div className="space-y-4">
+      <div className="rounded-xl border border-primary/20 bg-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-primary">{isDistributorSection ? "Distributor Orders" : "Customer Orders"}</h2>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              {isDistributorSection
+                ? "Incoming orders from distributors and their hotels. Each has its own filters and options."
+                : "Incoming orders from customers/hotels. Each has its own filters and options."}
+              {" "}Showing {filtered.length} of {sectionOrders.length} order(s).
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" disabled={busy} onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today</Button>
+            <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
+            <Button onClick={openSummary}><ListChecks className="h-4 w-4 mr-2" /> Summary</Button>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-4">
+          <div><Label>Specific Date</Label><Input type="date" value={specificDate} onChange={(e) => setSpecificDate(e.target.value)} disabled={partySelected} /></div>
+          <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate || partySelected} /></div>
+          <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate || partySelected} /></div>
+          <div>
+            <Label>{isDistributorSection ? "Distributor / Hotel" : "Customer"}</Label>
+            <HotelCombobox
+              customers={partyOptions}
+              value={filterCustomer}
+              onChange={setFilterCustomer}
+              allLabel={isDistributorSection ? "All distributors & hotels" : "All customers"}
+            />
+            {partySelected && <p className="mt-1 text-[11px] text-muted-foreground">Showing all dates. Choose “{isDistributorSection ? "All distributors & hotels" : "All customers"}” to filter by date.</p>}
+          </div>
         </div>
       </div>
 
@@ -503,7 +494,7 @@ export default function Orders() {
               <th className="p-3 w-10"><input type="checkbox" checked={allChecked} onChange={toggleAll} className="h-4 w-4 cursor-pointer" /></th>
               <th className="p-3">Internal #</th>
               <th className="p-3">Date</th>
-              <th className="p-3">Customer</th>
+              <th className="p-3">{isDistributorSection ? "Distributor / Hotel" : "Customer"}</th>
               <th className="p-3">Type</th>
               <th className="p-3 text-right">Bottles</th>
               <th className="p-3">Status</th>
@@ -518,7 +509,10 @@ export default function Orders() {
                 </td>
                 <td className="p-3 font-medium text-primary">{o.internal_invoice_number}</td>
                 <td className="p-3">{o.order_date}</td>
-                <td className="p-3">{o.display_name || o.customer_name}</td>
+                <td className="p-3">
+                  {o.display_name || o.customer_name}
+                  {isDistributorParty(o) && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Distributor</span>}
+                </td>
                 <td className="p-3"><span className={o.has_gst ? "text-primary" : "text-muted-foreground"}>{o.has_gst ? "GST" : "Non-GST"}</span></td>
                 <td className="p-3 text-right">{o.total_bottles || 0}</td>
                 <td className="p-3">
@@ -542,6 +536,7 @@ export default function Orders() {
             <div className="max-h-[65vh] space-y-4 overflow-y-auto">
               <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
                 <div><span className="text-muted-foreground">Order Date</span><div className="font-medium">{selected.order_date}</div></div>
+                <div><span className="text-muted-foreground">Party</span><div className="font-medium">{isDistributorParty(selected) ? "Distributor" : "Customer"}</div></div>
                 <div><span className="text-muted-foreground">Type</span><div className="font-medium">{selected.has_gst ? "GST" : "Non-GST"}</div></div>
                 <div><span className="text-muted-foreground">Total Bottles</span><div className="font-medium">{selected.total_bottles || 0}</div></div>
               </div>
@@ -661,7 +656,7 @@ export default function Orders() {
           <DialogHeader>
             <div className="flex flex-wrap items-start justify-between gap-2 pr-8">
               <div>
-                <DialogTitle>Order Summary — by hotel &amp; flavour</DialogTitle>
+                <DialogTitle>{isDistributorSection ? "Distributor" : "Customer"} Order Summary — by party &amp; flavour</DialogTitle>
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   Print layout: A4 landscape, everything at 1.5× — one page where it fits, otherwise it flows onto a second page.
                 </p>
@@ -673,18 +668,18 @@ export default function Orders() {
             </div>
           </DialogHeader>
           <div ref={summaryRef} className="max-h-[70vh] space-y-4 overflow-y-auto">
-            {hotelMrpRows.length > 0 && (
+            {partyMrpRows.length > 0 && (
               <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
-                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-primary">Hotel MRP</h3>
+                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-primary">Party MRP</h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="text-xs text-muted-foreground">
-                      <tr><th className="p-2 text-left">Hotel</th><th className="p-2 text-right">Goli Fizz MRP</th><th className="p-2 text-right">Goli Blast MRP</th><th className="p-2 text-right">Petbottle MRP</th></tr>
+                      <tr><th className="p-2 text-left">Party</th><th className="p-2 text-right">Goli Fizz MRP</th><th className="p-2 text-right">Goli Blast MRP</th><th className="p-2 text-right">Petbottle MRP</th></tr>
                     </thead>
                     <tbody>
-                      {hotelMrpRows.map(([hotel, m]) => (
-                        <tr key={hotel} className="border-t border-primary/10">
-                          <td className="p-2">{hotel}</td>
+                      {partyMrpRows.map(([party, m]) => (
+                        <tr key={party} className="border-t border-primary/10">
+                          <td className="p-2">{party}</td>
                           <td className="p-2 text-right">₹ {Number(m.goli_fizz).toFixed(0)}</td>
                           <td className="p-2 text-right">₹ {Number(m.goli_blast).toFixed(0)}</td>
                           <td className="p-2 text-right">₹ {Number(m.petbottle).toFixed(0)}</td>
@@ -696,8 +691,8 @@ export default function Orders() {
               </div>
             )}
             {categories.map((cat) => {
-              const hotels = Object.entries(groupedSummary[cat] || {});
-              if (hotels.length === 0) return null;
+              const parties = Object.entries(groupedSummary[cat] || {});
+              if (parties.length === 0) return null;
               const flavs = flavoursByCategory(cat);
               return (
                 <div key={cat} className="rounded-xl border border-primary/20 p-3">
@@ -706,7 +701,7 @@ export default function Orders() {
                     <table className="w-full text-sm">
                       <thead className="text-xs text-muted-foreground">
                         <tr>
-                          <th rowSpan={2} className="p-2 text-left">Hotel</th>
+                          <th rowSpan={2} className="p-2 text-left">Party</th>
                           <th rowSpan={2} className="p-2 text-right">MRP</th>
                           {flavs.map((fl) => <th key={fl} colSpan={2} className="p-2 text-center">{fl}</th>)}
                           <th colSpan={2} className="p-2 text-center font-bold text-primary">Total</th>
@@ -721,11 +716,11 @@ export default function Orders() {
                         </tr>
                       </thead>
                       <tbody>
-                        {hotels.map(([hotel, h]) => {
-                          const rt = hotelRowTotal(h);
+                        {parties.map(([party, h]) => {
+                          const rt = partyRowTotal(h);
                           return (
-                            <tr key={hotel} className="border-t border-primary/10">
-                              <td className="p-2">{hotel}</td>
+                            <tr key={party} className="border-t border-primary/10">
+                              <td className="p-2">{party}</td>
                               <td className="p-2 text-right">₹ {Number(h.mrp || 0).toFixed(0)}</td>
                               {flavs.flatMap((fl) => {
                                 const p = h.products[fl];
@@ -771,6 +766,90 @@ export default function Orders() {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+export default function Orders() {
+  const { categories, flavoursByCategory, productList } = useProducts();
+  const [orders, setOrders] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [distributors, setDistributors] = useState([]);
+  const [distributorHotels, setDistributorHotels] = useState([]);
+  const [bills, setBills] = useState([]);
+  const [deliveries, setDeliveries] = useState([]);
+
+  // Fetch the full history once (not just the last 500) so every party's older
+  // invoices stay viewable and each section can filter independently.
+  const load = async () => {
+    const [customerList, distributorList, hotelList] = await Promise.all([
+      db.entities.Customer.list(),
+      db.entities.Distributor.list(),
+      db.entities.DistributorHotel.list(),
+    ]);
+    setCustomers(customerList);
+    setDistributors(distributorList);
+    setDistributorHotels(hotelList);
+
+    const [orderList, billList, deliveryList] = await Promise.all([
+      db.entities.Order.list("-order_date", 1000),
+      db.entities.Bill.list("-invoice_date", 1000),
+      db.entities.Delivery.list("-delivery_date", 1000),
+    ]);
+    setOrders(orderList);
+    setBills(billList);
+    setDeliveries(deliveryList);
+  };
+  useEffect(() => { load(); }, []);
+
+  const customersById = useMemo(() => Object.fromEntries(customers.map((c) => [c.id, c])), [customers]);
+  const distributorsById = useMemo(() => Object.fromEntries(distributors.map((d) => [d.id, d])), [distributors]);
+  const distributorHotelsById = useMemo(() => Object.fromEntries(distributorHotels.map((h) => [h.id, h])), [distributorHotels]);
+
+  const customerOptions = useMemo(() => sortCustomersAlpha(customers).map((c) => ({
+    ...c,
+    customer_name: c.customer_name,
+    display_name: c.display_name,
+  })), [customers]);
+
+  const distributorOptions = useMemo(() => {
+    const distributorRows = sortPartiesAlpha(distributors).map((d) => ({
+      ...d,
+      customer_name: d.distributor_name,
+      display_name: `${d.display_name || d.distributor_name} · Distributor`,
+    }));
+    const hotelRows = sortPartiesAlpha(distributorHotels).map((h) => ({
+      ...h,
+      customer_name: partyName(h),
+      display_name: `${partyDisplayName(h)} · ${partyDisplayName(distributorsById[h.distributor_id]) || "Distributor"}`,
+    }));
+    return [...distributorRows, ...hotelRows];
+  }, [distributors, distributorHotels, distributorsById]);
+
+  const sectionProps = {
+    orders,
+    bills,
+    deliveries,
+    customersById,
+    distributorsById,
+    distributorHotelsById,
+    load,
+    categories,
+    flavoursByCategory,
+    productList,
+  };
+
+  return (
+    <PageShell
+      title="Orders"
+      subtitle="Internal invoices — customer and distributor orders are shown in separate sections"
+    >
+      <div className="space-y-10">
+        <OrderSection kind="customer" partyOptions={customerOptions} {...sectionProps} />
+        <div className="border-t border-border pt-8">
+          <OrderSection kind="distributor" partyOptions={distributorOptions} {...sectionProps} />
+        </div>
+      </div>
     </PageShell>
   );
 }

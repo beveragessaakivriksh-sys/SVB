@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 
-// Searchable hotel dropdown: tap to open, type to narrow the list, pick one.
-// `value` is a customer id, or "all" for no hotel filter.
+// Searchable party dropdown: tap to open, type to narrow the list, pick one.
+// `value` is a customer/distributor/hotel id, or "all" for no party filter.
 export default function HotelCombobox({ customers = [], value, onChange, allLabel = "All hotels" }) {
   const [open, setOpen] = useState(false);
   const labelOf = (c) => c.display_name || c.customer_name;
@@ -28,9 +28,9 @@ export default function HotelCombobox({ customers = [], value, onChange, allLabe
       </PopoverTrigger>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[220px] p-0" align="start">
         <Command>
-          <CommandInput placeholder="Type hotel name…" />
+          <CommandInput placeholder="Type name…" />
           <CommandList>
-            <CommandEmpty>No hotel found.</CommandEmpty>
+            <CommandEmpty>No match found.</CommandEmpty>
             <CommandGroup>
               <CommandItem value="all hotels" onSelect={() => pick("all")}>
                 <Check className={cn("mr-2 h-4 w-4", value === "all" ? "opacity-100" : "opacity-0")} />

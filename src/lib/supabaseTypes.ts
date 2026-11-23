@@ -8,7 +8,8 @@ export type DispatchStatus = "pending" | "dispatched";
 export type DeliveryStatus = "pending" | "delivered";
 export type ProductCategory = "Goli Fizz" | "Goli Blast" | "Petbottle";
 export type PaymentMode = "UPI" | "Cash" | "Bank Transfer" | "Cheque";
-export type InvoiceSeriesType = "gst" | "non_gst";
+export type PartyType = "customer" | "distributor";
+export type InvoiceSeriesType = "gst" | "non_gst" | "internal" | "distributor";
 
 export interface BillItem {
   category: ProductCategory;
@@ -65,6 +66,80 @@ export interface Customer {
   updated_at: string;
 }
 
+// Distributors mirror the Customer shape; the primary name column differs.
+export interface Distributor {
+  id: string;
+  user_id: string | null;
+  distributor_name: string;
+  display_name: string | null;
+  has_gst: boolean;
+  place_of_supply: string | null;
+  place_of_supply_state_code: string | null;
+  gst_treatment: string | null;
+  gstin: string | null;
+  billing_attention: string | null;
+  billing_address: string | null;
+  billing_street2: string | null;
+  billing_city: string | null;
+  billing_state: string | null;
+  billing_country: string | null;
+  billing_code: string | null;
+  shipping_attention: string | null;
+  shipping_address: string | null;
+  shipping_street2: string | null;
+  shipping_city: string | null;
+  shipping_state: string | null;
+  shipping_country: string | null;
+  shipping_code: string | null;
+  goli_fizz_mrp: number;
+  goli_blast_mrp: number;
+  petbottle_mrp: number;
+  payment_terms_label: string | null;
+  closing_stock_crates: number;
+  closing_stock_loose: number;
+  product_prices: Record<string, { selling_price?: number; mrp?: number }>;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// A hotel belonging to a distributor; the bill-to party for distributor orders.
+export interface DistributorHotel {
+  id: string;
+  user_id: string | null;
+  distributor_id: string;
+  hotel_name: string;
+  display_name: string | null;
+  has_gst: boolean;
+  place_of_supply: string | null;
+  place_of_supply_state_code: string | null;
+  gst_treatment: string | null;
+  gstin: string | null;
+  billing_attention: string | null;
+  billing_address: string | null;
+  billing_street2: string | null;
+  billing_city: string | null;
+  billing_state: string | null;
+  billing_country: string | null;
+  billing_code: string | null;
+  shipping_attention: string | null;
+  shipping_address: string | null;
+  shipping_street2: string | null;
+  shipping_city: string | null;
+  shipping_state: string | null;
+  shipping_country: string | null;
+  shipping_code: string | null;
+  goli_fizz_mrp: number;
+  goli_blast_mrp: number;
+  petbottle_mrp: number;
+  payment_terms_label: string | null;
+  closing_stock_crates: number;
+  closing_stock_loose: number;
+  product_prices: Record<string, { selling_price?: number; mrp?: number }>;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
 export interface Product {
   id: string;
   user_id: string | null;
@@ -92,6 +167,10 @@ export interface Bill {
   id: string;
   user_id: string | null;
   customer_id: string | null;
+  distributor_id: string | null;
+  distributor_hotel_id: string | null;
+  party_type: PartyType;
+  customer_name: string | null;
   has_gst: boolean;
   invoice_number: string;
   invoice_series: string | null;
@@ -141,6 +220,9 @@ export interface Delivery {
   id: string;
   user_id: string | null;
   customer_id: string | null;
+  distributor_id: string | null;
+  distributor_hotel_id: string | null;
+  party_type: PartyType;
   bill_id: string | null;
   customer_name: string | null;
   delivery_date: string;
@@ -161,6 +243,9 @@ export interface CrateEntry {
   id: string;
   user_id: string | null;
   customer_id: string | null;
+  distributor_id: string | null;
+  distributor_hotel_id: string | null;
+  party_type: PartyType;
   customer_name: string | null;
   entry_date: string;
   crates_returned: number;
@@ -177,6 +262,7 @@ export interface DailyProduction {
   id: string;
   user_id: string | null;
   production_date: string;
+  opening_stock: Array<{ category: ProductCategory; flavour: string; crates: number; loose: number }>;
   entries: Array<Record<string, unknown>>;
   total_units: number;
   closing_stock: Array<{ category: ProductCategory; flavour: string; quantity: number }>;
@@ -189,6 +275,9 @@ export interface Order {
   id: string;
   user_id: string | null;
   customer_id: string | null;
+  distributor_id: string | null;
+  distributor_hotel_id: string | null;
+  party_type: PartyType;
   customer_name: string | null;
   display_name: string | null;
   has_gst: boolean;
@@ -246,6 +335,8 @@ export interface Database {
     Tables: {
       profiles: { Row: Profile; Insert: Partial<Profile>; Update: Partial<Profile> };
       customers: { Row: Customer; Insert: Partial<Customer>; Update: Partial<Customer> };
+      distributors: { Row: Distributor; Insert: Partial<Distributor>; Update: Partial<Distributor> };
+      distributor_hotels: { Row: DistributorHotel; Insert: Partial<DistributorHotel>; Update: Partial<DistributorHotel> };
       products: { Row: Product; Insert: Partial<Product>; Update: Partial<Product> };
       invoice_series: { Row: InvoiceSeries; Insert: Partial<InvoiceSeries>; Update: Partial<InvoiceSeries> };
       bills: { Row: Bill; Insert: Partial<Bill>; Update: Partial<Bill> };

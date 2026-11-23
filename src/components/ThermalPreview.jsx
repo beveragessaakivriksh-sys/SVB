@@ -70,7 +70,7 @@ export default function ThermalPreview({ bill, customer, onPrintError, stockCont
         )}
         <div className="my-1 border-t border-dashed border-primary/30" />
         <div className="text-center text-[11px] font-bold">{bill.has_gst ? "TAX INVOICE" : "INVOICE"}</div>
-        <div>Hotel: {c.hotel}</div>
+        <div>{bill.party_type === "distributor" || bill.distributor_id ? "Distributor" : "Hotel"}: {c.hotel}</div>
         <div>Invoice #: {c.invoiceNumber}</div>
         <div>Date: {c.date} {c.time}</div>
         <div>Payment: <span className="capitalize">{c.paymentStatus}</span>{bill.payment_mode ? " / " + bill.payment_mode : ""}</div>
@@ -99,7 +99,7 @@ export default function ThermalPreview({ bill, customer, onPrintError, stockCont
         <div className="flex justify-between"><span>Empty Crates Collected</span><span>{c.emptyCrates}</span></div>
         <div className="flex justify-between"><span>Damaged Bottles</span><span>{Number(bill.damaged_bottles) || 0}</span></div>
         <div className="flex justify-between"><span>Previous Closing Stock</span><span>{c.previousStock.crates} cr + {c.previousStock.loose} lo</span></div>
-        <div className="flex justify-between"><span>Closing Stock (Hotel)</span><span>{c.closingStock.crates} cr + {c.closingStock.loose} lo</span></div>
+        <div className="flex justify-between"><span>Closing Stock ({bill.party_type === "distributor" || bill.distributor_id ? "Distributor" : "Hotel"})</span><span>{c.closingStock.crates} cr + {c.closingStock.loose} lo</span></div>
         <div className="my-1 border-t border-dashed border-primary/30" />
         <div className="text-[10px] leading-snug">{THERMAL_LIABILITY}</div>
         <div className="mt-2 text-center font-bold text-primary">Thank you!</div>

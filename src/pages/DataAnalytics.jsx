@@ -39,6 +39,19 @@ import {
 
 const GREENS = ["#6366f1", "#ec4899", "#f59e0b", "#10b981", "#06b6d4", "#8b5cf6", "#ef4444", "#14b8a6", "#f97316", "#3b82f6", "#a855f7", "#84cc16"];
 const PAGE_SIZE = 1000;
+const localDateISO = (value = new Date()) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const addDaysISO = (iso, days) => {
+  const [year, month, day] = String(iso).split("-").map(Number);
+  const value = new Date(year, month - 1, day, 12, 0, 0, 0);
+  value.setDate(value.getDate() + days);
+  return localDateISO(value);
+};
 
 // Supabase/PostgREST caps a single response (usually at 1000 rows), so page
 // through the whole table. This is what makes the forecast learn from ALL
@@ -74,6 +87,7 @@ export default function DataAnalytics() {
   const [deliveries, setDeliveries] = useState([]);
   const [production, setProduction] = useState([]);
   const [crates, setCrates] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(() => addDaysISO(localDateISO(), 1));
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -157,7 +171,10 @@ export default function DataAnalytics() {
     }));
   }, [bills, deliveries]);
 
-  const model = useMemo(() => buildDemandForecast(demandRows), [demandRows]);
+  const model = useMemo(
+    () => buildDemandForecast(demandRows, { targetDate: selectedDate }),
+    [demandRows, selectedDate]
+  );
 
   const numberFmt = useMemo(() => new Intl.NumberFormat("en-IN"), []);
   const inrFmt = useMemo(
@@ -235,10 +252,16 @@ export default function DataAnalytics() {
   ];
 
   const actions = (
-    <Button variant="outline" onClick={() => load(true)} disabled={loading || refreshing}>
-      {refreshing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-      Refresh
-    </Button>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-muted-foreground">Forecast date</span>
+      <Input type="date" value={selectedDate} min={localDateISO()} onChange={(event) => setSelectedDate(event.target.value)} className="w-44" aria-label="Forecast date" />
+      <Button variant="outline" size="sm" onClick={() => setSelectedDate(localDateISO())}>Today</Button>
+      <Button variant="outline" size="sm" onClick={() => setSelectedDate(addDaysISO(localDateISO(), 1))}>Tomorrow</Button>
+      <Button variant="outline" size="sm" onClick={() => load(true)} disabled={loading || refreshing}>
+        {refreshing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+        Refresh
+      </Button>
+    </div>
   );
 
   if (loading) {
@@ -299,7 +322,7 @@ export default function DataAnalytics() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h3 className="flex items-center gap-2 text-sm font-semibold text-primary">
-                  <BrainCircuit className="h-4 w-4" /> Order Forecast — Next 7 Days
+                  <BrainCircuit className="h-4 w-4" /> Order Forecast — {selectedDate}
                 </h3>
                 <p className="mt-1 max-w-2xl text-xs text-muted-foreground">
                   Trained on every {fallbackSource || "order"} row in history ({numberFmt.format(model.history.orders)}) using {model.modelLabel}.
@@ -320,12 +343,12 @@ export default function DataAnalytics() {
               <div className="rounded-lg border border-primary/15 bg-white p-3">
                 <div className="text-[11px] text-muted-foreground">Expected Orders</div>
                 <div className="text-xl font-bold text-primary">{numberFmt.format(model.totals.orders)}</div>
-                <div className="text-[10px] text-muted-foreground">next 7 days</div>
+                <div className="text-[10px] text-muted-foreground">on {selectedDate}</div>
               </div>
               <div className="rounded-lg border border-primary/15 bg-white p-3">
                 <div className="text-[11px] text-muted-foreground">Expected Bottles</div>
                 <div className="text-xl font-bold text-primary">{numberFmt.format(model.totals.bottles)}</div>
-                <div className="text-[10px] text-muted-foreground">next 7 days</div>
+                <div className="text-[10px] text-muted-foreground">on {selectedDate}</div>
               </div>
               <div className="rounded-lg border border-primary/15 bg-white p-3">
                 <div className="text-[11px] text-muted-foreground">Busiest Day</div>
@@ -348,7 +371,7 @@ export default function DataAnalytics() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-primary/20 bg-white p-4">
-              <h3 className="mb-3 text-sm font-semibold text-primary">Predicted Orders &amp; Bottles — Next 7 Days</h3>
+              <h3 className="mb-3 text-sm font-semibold text-primary">Predicted Orders &amp; Bottles — {selectedDate}</h3>
               <ResponsiveContainer width="100%" height={260}>
                 <ComposedChart data={model.forecastDays}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -384,7 +407,7 @@ export default function DataAnalytics() {
                     </tr>
                   ))}
                   <tr className="border-t-2 border-primary/30 bg-primary/5 font-bold">
-                    <td className="p-2" colSpan={2}>7-day total</td>
+                    <td className="p-2" colSpan={2}>Total</td>
                     <td className="p-2 text-right text-primary">{model.totals.orders}</td>
                     <td className="p-2 text-right text-primary">{model.totals.bottles}</td>
                   </tr>
@@ -395,7 +418,7 @@ export default function DataAnalytics() {
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div className="rounded-xl border border-primary/20 bg-white p-4">
-              <h3 className="mb-3 text-sm font-semibold text-primary">Predicted Flavour Demand — Next 7 Days</h3>
+              <h3 className="mb-3 text-sm font-semibold text-primary">Predicted Flavour Demand — {selectedDate}</h3>
               {predictedFlavours.length ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <BarChart data={predictedFlavours} layout="vertical">
@@ -414,7 +437,7 @@ export default function DataAnalytics() {
             </div>
 
             <div className="rounded-xl border border-primary/20 bg-white p-4">
-              <h3 className="mb-3 text-sm font-semibold text-primary">Flavour &amp; Category Forecast</h3>
+              <h3 className="mb-3 text-sm font-semibold text-primary">Flavour &amp; Category Forecast — {selectedDate}</h3>
               <div className="max-h-[300px] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-white text-xs text-muted-foreground">
@@ -444,7 +467,7 @@ export default function DataAnalytics() {
           </div>
 
           <div className="mt-4 rounded-xl border border-primary/20 bg-white p-4">
-            <h3 className="mb-3 text-sm font-semibold text-primary">Predicted Orders by Hotel — Next 7 Days</h3>
+            <h3 className="mb-3 text-sm font-semibold text-primary">Predicted Orders by Hotel — {selectedDate}</h3>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-xs text-muted-foreground">
@@ -580,7 +603,7 @@ export default function DataAnalytics() {
               <CalendarDays className="h-4 w-4" /> How this forecast is produced
             </h3>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Every order row is read (not just the latest page) and expanded into a daily history. For each day the model learns the day-of-week pattern, the recent level, and the recent trend. Forecasts blend the weekday pattern with the recent level, then apply the trend. Per-flavour, per-category and per-hotel forecasts use the same history, with recent orders weighted more heavily. The backtest above re-runs the model one day at a time over the last 14 days and compares its prediction with what actually happened.
+              Every order row is read (not just the latest page) and expanded into a daily history. For each day the model learns the day-of-week pattern, the recent level, and the recent trend. The selected date is forecast by blending that date&apos;s weekday pattern with the recent level, then applying the trend. Per-category, per-flavour and per-hotel predictions for {selectedDate} use the same history, with recent orders weighted more heavily. The backtest above re-runs the model one day at a time over the last 14 days and compares its prediction with what actually happened.
             </p>
           </div>
         </>

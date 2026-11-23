@@ -4,7 +4,8 @@ import { db } from "@/api/db";
 import PageShell from "@/components/PageShell";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO, bottlesPerCrate, PAYMENT_MODES } from "@/lib/constants";
-import { itemBottles, balanceDue } from "@/lib/billUtils";
+import { itemBottles, balanceDue, sortCustomersAlpha } from "@/lib/billUtils";
+import { isDistributorParty, partyDisplayName, resolveParty, sortPartiesAlpha } from "@/lib/partyUtils";
 import { printInvoiceA4, downloadInvoicePdf } from "@/lib/printUtils";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import ThermalPreview from "@/components/ThermalPreview";
@@ -24,6 +25,8 @@ export default function BillEntries() {
   const { toast } = useToast();
   const [bills, setBills] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [distributors, setDistributors] = useState([]);
+  const [distributorHotels, setDistributorHotels] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
   const [crateEntries, setCrateEntries] = useState([]);
   const [specificDate, setSpecificDate] = useState("");
@@ -42,13 +45,22 @@ export default function BillEntries() {
   const load = async () => {
     const all = await db.entities.Bill.list("-invoice_date", 500);
     setBills(all);
-    setCustomers(await db.entities.Customer.list());
+    const [customerList, distributorList, hotelList] = await Promise.all([
+      db.entities.Customer.list(),
+      db.entities.Distributor.list(),
+      db.entities.DistributorHotel.list(),
+    ]);
+    setCustomers(customerList);
+    setDistributors(distributorList);
+    setDistributorHotels(hotelList);
     setDeliveries(await db.entities.Delivery.list("-delivery_date", 500));
     setCrateEntries(await db.entities.CrateEntry.list("-entry_date", 500));
   };
   useEffect(() => { load(); }, []);
 
   const syncBillCrateEntry = async (bill) => {
+    // Distributor bills keep their returns on the bill itself; customer crate entries are customer-only.
+    if (isDistributorParty(bill) || !bill.customer_id) return;
     try {
       const rc = Number(bill.returned_crates) || 0;
       const damaged = Number(bill.damaged_bottles) || 0;
@@ -70,12 +82,51 @@ export default function BillEntries() {
   };
 
   const customersById = useMemo(() => Object.fromEntries(customers.map((c) => [c.id, c])), [customers]);
+  const distributorsById = useMemo(() => Object.fromEntries(distributors.map((d) => [d.id, d])), [distributors]);
+  const distributorHotelsById = useMemo(() => Object.fromEntries(distributorHotels.map((h) => [h.id, h])), [distributorHotels]);
+  const partyOf = (bill) => resolveParty(bill, customersById, distributorsById, distributorHotelsById);
+
+  const partyOptions = useMemo(() => {
+    const customerOptions = sortCustomersAlpha(customers).map((c) => ({ ...c, title: c.display_name || c.customer_name }));
+    const distributorOptions = sortPartiesAlpha(distributors).map((d) => ({
+      ...d,
+      title: (d.display_name || d.distributor_name) + " (Distributor)",
+    }));
+    const hotelOptions = sortPartiesAlpha(distributorHotels).map((h) => ({
+      ...h,
+      title: partyDisplayName(h) + " - " + (partyDisplayName(distributorsById[h.distributor_id]) || "Distributor"),
+    }));
+    return [...customerOptions, ...distributorOptions, ...hotelOptions];
+  }, [customers, distributors, distributorHotels, distributorsById]);
+  const distributorsById = useMemo(() => Object.fromEntries(distributors.map((d) => [d.id, d])), [distributors]);
+  const distributorHotelsById = useMemo(() => Object.fromEntries(distributorHotels.map((h) => [h.id, h])), [distributorHotels]);
+  const partyOf = (bill) => resolveParty(bill, customersById, distributorsById, distributorHotelsById);
+
+  const partyOptions = useMemo(() => {
+    const customerOptions = sortCustomersAlpha(customers).map((c) => ({ ...c, title: c.display_name || c.customer_name }));
+    const distributorOptions = sortPartiesAlpha(distributors).map((d) => ({
+      ...d,
+      title: (d.display_name || d.distributor_name) + " (Distributor)",
+    }));
+    const hotelOptions = sortPartiesAlpha(distributorHotels).map((h) => ({
+      ...h,
+      title: partyDisplayName(h) + " - " + (partyDisplayName(distributorsById[h.distributor_id]) || "Distributor"),
+    }));
+    return [...customerOptions, ...distributorOptions, ...hotelOptions];
+  }, [customers, distributors, distributorHotels, distributorsById]);
 
   // Pending (unpaid) bills for the customer of the bill being viewed — warning banner.
   const pendingForCustomer = useMemo(() => {
     if (!selected) return [];
     return bills
-      .filter((b) => b.customer_id === selected.customer_id && b.id !== selected.id && (b.payment_status || "pending") === "pending" && balanceDue(b) > 0)
+      .filter((b) => {
+        if (b.id === selected.id) return false;
+        let sameParty;
+        if (selected.distributor_hotel_id) sameParty = b.distributor_hotel_id === selected.distributor_hotel_id;
+        else if (isDistributorParty(selected)) sameParty = b.distributor_id === selected.distributor_id;
+        else sameParty = b.customer_id === selected.customer_id;
+        return sameParty && (b.payment_status || "pending") === "pending" && balanceDue(b) > 0;
+      })
       .sort((a, b) => String(b.invoice_date || "").localeCompare(String(a.invoice_date || "")));
   }, [bills, selected]);
   const pendingTotal = pendingForCustomer.reduce((s, b) => s + balanceDue(b), 0);
@@ -87,21 +138,21 @@ export default function BillEntries() {
     return bills.filter((b) => {
       if (specificDate) { if (b.invoice_date !== specificDate) return false; }
       else { if (b.invoice_date < from || b.invoice_date > to) return false; }
-      if (filterCustomer !== "all" && b.customer_id !== filterCustomer) return false;
+      if (filterCustomer !== "all" && b.customer_id !== filterCustomer && b.distributor_id !== filterCustomer && b.distributor_hotel_id !== filterCustomer) return false;
       return true;
     });
   }, [bills, specificDate, from, to, filterCustomer, showAll]);
 
   const exportGst = () => {
     const gstBills = filtered.filter((b) => b.has_gst);
-    const rows = gstBills.flatMap((b) => buildGstZohoRows(b, customersById[b.customer_id]));
+    const rows = gstBills.flatMap((b) => buildGstZohoRows(b, partyOf(b)));
     if (!rows.length) return toast({ variant: "destructive", title: "No GST bills in range" });
     downloadCsv(GST_ZOHO_COLUMNS, rows, `gst_bills_${from}_to_${to}.csv`);
   };
 
   const exportNonGst = () => {
     const ngBills = filtered.filter((b) => !b.has_gst);
-    const rows = ngBills.flatMap((b) => buildNonGstRows(b, customersById[b.customer_id]));
+    const rows = ngBills.flatMap((b) => buildNonGstRows(b, partyOf(b)));
     if (!rows.length) return toast({ variant: "destructive", title: "No non-GST bills in range" });
     downloadCsv(NON_GST_COLUMNS, rows, `nongst_bills_${from}_to_${to}.csv`);
   };
@@ -247,12 +298,12 @@ export default function BillEntries() {
     try {
       let made = 0;
       for (const b of summaryBills) {
-        const customer = customersById[b.customer_id];
-        if (!customer) {
-          toast({ variant: "destructive", title: `Skipped ${b.invoice_number}`, description: "Its customer no longer exists." });
+        const party = partyOf(b);
+        if (!party) {
+          toast({ variant: "destructive", title: `Skipped ${b.invoice_number}`, description: "Its customer/distributor/hotel no longer exists." });
           continue;
         }
-        await cloneToTodayOrder({ customer, items: b.items, user });
+        await cloneToTodayOrder({ customer: party, items: b.items, user });
         made += 1;
       }
       if (made > 0) {
@@ -288,12 +339,12 @@ export default function BillEntries() {
         <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate} /></div>
         <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate} /></div>
         <div>
-          <Label>Hotel</Label>
+          <Label>Customer / Distributor</Label>
           <Select value={filterCustomer} onValueChange={setFilterCustomer}>
-            <SelectTrigger><SelectValue placeholder="All hotels" /></SelectTrigger>
+            <SelectTrigger><SelectValue placeholder="All customers & distributors" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All hotels</SelectItem>
-              {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.customer_name}</SelectItem>)}
+              <SelectItem value="all">All customers & distributors</SelectItem>
+              {partyOptions.map((p) => <SelectItem key={p.id} value={p.id}>{p.title}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
@@ -306,7 +357,7 @@ export default function BillEntries() {
               <th className="p-3 w-10"><input type="checkbox" checked={allChecked} onChange={toggleAll} className="h-4 w-4 cursor-pointer" /></th>
               <th className="p-3">Invoice #</th>
               <th className="p-3">Date</th>
-              <th className="p-3">Customer</th>
+              <th className="p-3">Customer / Distributor</th>
               <th className="p-3">Type</th>
               <th className="p-3 text-right">Total</th>
               <th className="p-3">Payment</th>
@@ -325,7 +376,10 @@ export default function BillEntries() {
                   </td>
                   <td className="p-3 font-medium text-primary">{b.invoice_number}</td>
                   <td className="p-3">{b.invoice_date}</td>
-                  <td className="p-3">{b.customer_name}</td>
+                  <td className="p-3">
+                    {b.customer_name}
+                    {isDistributorParty(b) && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Distributor</span>}
+                  </td>
                   <td className="p-3"><span className={b.has_gst ? "text-primary" : "text-muted-foreground"}>{b.has_gst ? "GST" : "Non-GST"}</span></td>
                   <td className="p-3 text-right">₹ {(b.total || 0).toFixed(2)}</td>
                   <td className="p-3 capitalize">{b.payment_status}</td>
@@ -360,7 +414,7 @@ export default function BillEntries() {
               {pendingForCustomer.length > 0 && (
                 <Alert className="border-amber-300 bg-amber-50 [&>svg]:text-amber-600">
                   <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle className="text-amber-900">Warning: This hotel has {pendingForCustomer.length} pending bills totaling ₹{pendingTotal.toFixed(2)}</AlertTitle>
+                  <AlertTitle className="text-amber-900">Warning: This customer/distributor has {pendingForCustomer.length} pending bills totaling ₹{pendingTotal.toFixed(2)}</AlertTitle>
                   <AlertDescription className="text-amber-800">
                     <ul className="mt-1 space-y-1 text-xs">
                       {pendingForCustomer.slice(0, 5).map((b) => (
@@ -451,9 +505,9 @@ export default function BillEntries() {
 
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <Button variant="outline" size="sm" onClick={() => { setEditing(selected); setSelected(null); }}><Pencil className="h-4 w-4 mr-2" /> Modify</Button>
-                <Button variant="outline" size="sm" onClick={() => printInvoiceA4(selected, customersById[selected.customer_id])}><Printer className="h-4 w-4 mr-2" /> Print A4</Button>
+                <Button variant="outline" size="sm" onClick={() => printInvoiceA4(selected, partyOf(selected))}><Printer className="h-4 w-4 mr-2" /> Print A4</Button>
                 <Button variant="outline" size="sm" onClick={() => printInvoiceA4(selected, customersById[selected.customer_id], { duplicate: true })}><Copy className="h-4 w-4 mr-2" /> A4 Duplicate</Button>
-                <Button variant="outline" size="sm" onClick={() => downloadInvoicePdf(selected, customersById[selected.customer_id])}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
+                <Button variant="outline" size="sm" onClick={() => downloadInvoicePdf(selected, partyOf(selected))}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
               </div>
 
               {selected.delivery_status === "delivered" && (
@@ -461,7 +515,7 @@ export default function BillEntries() {
                   <div className="mb-2 text-xs font-semibold text-primary">Thermal Print (3 inch) — Original &amp; Duplicate · Bluetooth &amp; USB</div>
                   <ThermalPreview
                     bill={selected}
-                    customer={customersById[selected.customer_id]}
+                    customer={partyOf(selected)}
                     stockContext={{ bills, crateEntries }}
                     onPrintError={(e) => toast({ variant: "destructive", title: "Print failed", description: e.message })}
                   />

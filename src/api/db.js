@@ -13,6 +13,8 @@
 //   DailyProduction -> daily_productions
 //   DailySummary    -> daily_summaries
 //   Delivery        -> deliveries
+//   Distributor     -> distributors
+//   DistributorHotel -> distributor_hotels (hotels under a distributor)
 //   InvoiceSeries   -> invoice_series
 //   Order           -> orders
 //   Product         -> products
@@ -27,6 +29,8 @@ const TABLES = {
   DailyProduction: "daily_productions",
   DailySummary: "daily_summaries",
   Delivery: "deliveries",
+  Distributor: "distributors",
+  DistributorHotel: "distributor_hotels",
   InvoiceSeries: "invoice_series",
   Order: "orders",
   Product: "products",

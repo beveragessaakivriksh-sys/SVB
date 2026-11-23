@@ -84,32 +84,64 @@ export function sortCustomersAlpha(customers = []) {
   );
 }
 
+// Distributors and their hotels live in separate tables and are referenced by
+// distributor_id / distributor_hotel_id on orders and bills. These helpers keep
+// the stock ledger working for customers, distributors and distributor hotels.
+function isDistributorHotelRecord(party) {
+  return !!party && (!!party.hotel_name || !!party.distributor_id || party.party_type === "distributor_hotel");
+}
+
+function isDistributorRecord(party) {
+  return !!party && (!!party.distributor_name || party.party_type === "distributor" || isDistributorHotelRecord(party));
+}
+
+function partyOwns(record, party) {
+  if (!record || !party?.id) return false;
+  if (isDistributorHotelRecord(party)) return record.distributor_hotel_id === party.id;
+  if (isDistributorRecord(party)) return record.distributor_id === party.id;
+  return record.customer_id === party.id;
+}
+
 export function customerClosingStock(customer, bills = [], crateEntries = []) {
-  const cid = customer?.id;
   const startCrates = Number(customer?.closing_stock_crates) || 0;
   const startLoose = Number(customer?.closing_stock_loose) || 0;
   let bottles = startCrates * BOTTLES_PER_CRATE + startLoose;
-  (bills || []).forEach((b) => { if (b.customer_id === cid) bottles += totalBottles(b.items || []); });
-  (crateEntries || []).forEach((e) => {
-    if (e.customer_id === cid) bottles -= (Number(e.crates_returned) || 0) * BOTTLES_PER_CRATE + (Number(e.loose_bottles_returned) || 0) + (Number(e.damaged_bottles) || 0);
+  const distributor = isDistributorRecord(customer);
+  (bills || []).forEach((b) => {
+    if (!partyOwns(b, customer)) return;
+    bottles += totalBottles(b.items || []);
+    if (distributor) {
+      bottles -= (Number(b.returned_crates) || 0) * BOTTLES_PER_CRATE + (Number(b.damaged_bottles) || 0);
+    }
   });
+  if (!distributor) {
+    (crateEntries || []).forEach((e) => {
+      if (e.customer_id === customer?.id) bottles -= (Number(e.crates_returned) || 0) * BOTTLES_PER_CRATE + (Number(e.loose_bottles_returned) || 0) + (Number(e.damaged_bottles) || 0);
+    });
+  }
   return bottlesToCrateLoose(bottles);
 }
 
 // Hotel closing stock computed from the full delivery + crate-return history.
 // Pass excludeBillId to get the stock "before this bill" (previous closing stock).
 export function hotelClosingStock(customer, bills = [], crateEntries = [], { excludeBillId } = {}) {
-  const cid = customer?.id;
   const startCrates = Number(customer?.closing_stock_crates) || 0;
   const startLoose = Number(customer?.closing_stock_loose) || 0;
   let bottles = startCrates * BOTTLES_PER_CRATE + startLoose;
+  const distributor = isDistributorRecord(customer);
   (bills || []).forEach((b) => {
-    if (b.customer_id === cid && b.id !== excludeBillId) bottles += totalBottles(b.items || []);
+    if (!partyOwns(b, customer) || b.id === excludeBillId) return;
+    bottles += totalBottles(b.items || []);
+    if (distributor) {
+      bottles -= (Number(b.returned_crates) || 0) * BOTTLES_PER_CRATE + (Number(b.damaged_bottles) || 0);
+    }
   });
-  (crateEntries || []).forEach((e) => {
-    if (e.customer_id === cid && e.bill_id !== excludeBillId)
-      bottles -= (Number(e.crates_returned) || 0) * BOTTLES_PER_CRATE + (Number(e.loose_bottles_returned) || 0) + (Number(e.damaged_bottles) || 0);
-  });
+  if (!distributor) {
+    (crateEntries || []).forEach((e) => {
+      if (e.customer_id === customer?.id && e.bill_id !== excludeBillId)
+        bottles -= (Number(e.crates_returned) || 0) * BOTTLES_PER_CRATE + (Number(e.loose_bottles_returned) || 0) + (Number(e.damaged_bottles) || 0);
+    });
+  }
   return bottlesToCrateLoose(bottles);
 }
 
@@ -164,7 +196,7 @@ export function thermalContent(bill, customer, ctx = {}) {
     closingStock = computeClosingStock(bill, customer);
   }
   return {
-    hotel: bill.customer_name || customer?.customer_name || "",
+    hotel: bill.customer_name || customer?.customer_name || customer?.hotel_name || customer?.distributor_name || "",
     invoiceNumber: bill.invoice_number || "",
     date: bill.invoice_date || "",
     time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
