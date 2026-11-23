@@ -37,8 +37,12 @@ export default function NotificationBell({ user }) {
     load();
     if (!user?.id) return undefined;
 
+    // Unique topic per mount: Supabase reuses a channel with the same topic.
+    // In React Strict Mode the effect runs twice, and re-adding `.on()` to the
+    // already-subscribed channel throws, which blanks the entire app.
+    const topic = `admin-notifications-${user.id}-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
     const channel = supabase
-      .channel(`admin-notifications-${user.id}`)
+      .channel(topic)
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
