@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 import PageShell from "@/components/PageShell";
 import { CATEGORIES, FLAVOURS } from "@/lib/constants";
 import { padNumber } from "@/lib/billUtils";
-import { DEFAULT_SERIES } from "@/lib/invoiceSeries";
+import { DEFAULT_SERIES, defaultDistributorPrefix } from "@/lib/invoiceSeries";
 import { sortPartiesAlpha } from "@/lib/partyUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,7 @@ import { Plus, Trash2, Save, Database, Pencil, Check, X } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 
 const SERIES_LABELS = { gst: "GST Customers", non_gst: "Non-GST Customers", internal: "Internal Orders (Incoming Orders)", distributor: "Distributors Invoice Number" };
-const SERIES_SHORT = { gst: "GST", non_gst: "Non-GST", internal: "Internal", distributor: "Distributors" };
+const SERIES_SHORT = { gst: "GST", non_gst: "Non-GST", internal: "Internal" };
 
 export default function Settings() {
   const { toast } = useToast();
@@ -26,6 +26,8 @@ export default function Settings() {
   const [distributors, setDistributors] = useState([]);
   const [series, setSeries] = useState([]);
   const [drafts, setDrafts] = useState({});
+  const [distSeriesDrafts, setDistSeriesDrafts] = useState({});
+  const [users, setUsers] = useState([]);
   const [newProd, setNewProd] = useState({ category: "Goli Fizz", flavour: "" });
   const [editingId, setEditingId] = useState(null);
   const [editValue, setEditValue] = useState({ category: "Goli Fizz", flavour: "" });
@@ -34,15 +36,28 @@ export default function Settings() {
   const [editDistName, setEditDistName] = useState("");
 
   const load = async () => {
-    setProducts(await db.entities.Product.list());
-    setDistributors(sortPartiesAlpha(await db.entities.Distributor.list()));
-    const s = await db.entities.InvoiceSeries.list();
-    setSeries(s);
-    setDrafts(Object.fromEntries(s.map((x) => [x.id, {
+    const [productList, distributorList, seriesList, userList] = await Promise.all([
+      db.entities.Product.list(),
+      db.entities.Distributor.list(),
+      db.entities.InvoiceSeries.list(),
+      db.entities.User.list(),
+    ]);
+    setProducts(productList);
+    const sortedDistributors = sortPartiesAlpha(distributorList);
+    setDistributors(sortedDistributors);
+    setSeries(seriesList);
+    setUsers(userList);
+    setDrafts(Object.fromEntries(seriesList.map((x) => [x.id, {
       prefix: x.prefix || "",
       series_name: x.series_name || "",
       next_number: Number(x.next_number) || 1,
       padding: Number(x.padding) || 0,
+    }])));
+    // One independent invoice series per distributor.
+    setDistSeriesDrafts(Object.fromEntries(sortedDistributors.map((d) => [d.id, {
+      prefix: d.invoice_prefix || defaultDistributorPrefix(d.distributor_name || d.display_name),
+      next_number: Number(d.invoice_next_number) || 1001,
+      padding: Number(d.invoice_padding) ?? 4,
     }])));
   };
   useEffect(() => { load(); }, []);
@@ -162,6 +177,38 @@ export default function Settings() {
     load();
   };
 
+  const setDistDraft = (id, field, value) => {
+    setDistSeriesDrafts((prev) => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+  };
+
+  const saveDistSeries = async (d) => {
+    const draft = distSeriesDrafts[d.id];
+    if (!draft?.prefix) return toast({ variant: "destructive", title: "Enter a prefix (e.g. SB-)" });
+    try {
+      await db.entities.Distributor.update(d.id, {
+        invoice_prefix: draft.prefix,
+        invoice_next_number: Number(draft.next_number) || 1,
+        invoice_padding: Number(draft.padding) || 0,
+      });
+      toast({ title: "Distributor invoice series saved", description: `${d.distributor_name}: ${draft.prefix}${padNumber(Number(draft.next_number) || 1, Number(draft.padding) || 4)}` });
+      load();
+    } catch (e) {
+      toast({ variant: "destructive", title: "Error", description: e.message });
+    }
+  };
+
+  // Link a distributor login to exactly one distributor. Distributor accounts
+  // see only that distributor's incoming orders / order section.
+  const assignDistributorAccount = async (profile, distributorId) => {
+    try {
+      await db.entities.User.update(profile.id, { distributor_id: distributorId || null });
+      toast({ title: distributorId ? "Distributor access assigned" : "Distributor access removed", description: profile.email || "" });
+      load();
+    } catch (e) {
+      toast({ variant: "destructive", title: "Error", description: e.message });
+    }
+  };
+
   const clearData = async (entity) => {
     if (!confirm(`Delete ALL ${entity} records? This cannot be undone.`)) return;
     await db.entities[entity].deleteMany({});
@@ -272,8 +319,8 @@ export default function Settings() {
         {/* Invoice Series */}
         <div className="rounded-xl border border-border bg-card p-4">
           <h3 className="mb-1 text-sm font-semibold">Invoice Series</h3>
-          <p className="mb-3 text-[11px] text-muted-foreground">Set the invoice prefix and current bill number. The counter auto-increments on each new bill. The Internal series numbers the orders created in Incoming Orders; the GST / Non-GST series number is taken when a customer order is dispatched, and the Distributors Invoice Number series is taken when a distributor order is dispatched.</p>
-          {series.map((s) => {
+          <p className="mb-3 text-[11px] text-muted-foreground">Set the invoice prefix and current bill number. The counter auto-increments on each new bill. The Internal series numbers orders created in Incoming Orders; the GST / Non-GST number is taken when a customer order is dispatched. Distributor invoices use each distributor&apos;s own series below.</p>
+          {series.filter((s) => s.type !== "distributor").map((s) => {
             const d = drafts[s.id] || { prefix: s.prefix, series_name: s.series_name, next_number: s.next_number, padding: s.padding };
             return (
               <div key={s.id} className="mb-3 rounded-lg border border-border p-3">
@@ -292,12 +339,63 @@ export default function Settings() {
             );
           })}
           <div className="flex flex-wrap gap-2">
-            {["gst", "non_gst", "internal", "distributor"].filter((t) => !series.some((s) => s.type === t)).map((t) => (
+            {["gst", "non_gst", "internal"].filter((t) => !series.some((s) => s.type === t)).map((t) => (
               <Button key={t} size="sm" variant="outline" onClick={() => addSeries(t)}>
                 <Plus className="h-4 w-4 mr-1" /> Add {SERIES_SHORT[t]} series ({DEFAULT_SERIES[t].prefix}{DEFAULT_SERIES[t].next_number})
               </Button>
             ))}
           </div>
+        </div>
+
+        {/* Distributor Invoice Numbers — one series per distributor */}
+        <div className="rounded-xl border border-border bg-card p-4 lg:col-span-2">
+          <h3 className="mb-1 text-sm font-semibold">Distributor Invoice Numbers</h3>
+          <p className="mb-3 text-[11px] text-muted-foreground">Each distributor has its own prefix and counter, so invoice numbers never collide between distributors. The number is taken when a distributor order is dispatched from the Orders tab. Add distributors above first.</p>
+          <div className="max-h-80 space-y-2 overflow-y-auto">
+            {distributors.map((d) => {
+              const draft = distSeriesDrafts[d.id] || { prefix: defaultDistributorPrefix(d.distributor_name || d.display_name), next_number: 1001, padding: 4 };
+              return (
+                <div key={d.id} className="rounded-lg border border-border p-3">
+                  <div className="mb-2 text-xs font-semibold text-primary">{d.distributor_name}</div>
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <div><Label className="text-xs">Prefix</Label><Input value={draft.prefix} onChange={(e) => setDistDraft(d.id, "prefix", e.target.value)} /></div>
+                    <div><Label className="text-xs">Next Number</Label><Input type="number" value={draft.next_number} onChange={(e) => setDistDraft(d.id, "next_number", e.target.value)} /></div>
+                    <div><Label className="text-xs">Padding</Label><Input type="number" value={draft.padding} onChange={(e) => setDistDraft(d.id, "padding", e.target.value)} /></div>
+                    <div className="flex items-end"><Button size="sm" onClick={() => saveDistSeries(d)}><Save className="h-4 w-4 mr-1" /> Save</Button></div>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">Next invoice: <strong>{draft.prefix}{padNumber(Number(draft.next_number) || 1, Number(draft.padding) || 4)}</strong></div>
+                </div>
+              );
+            })}
+            {distributors.length === 0 && <div className="py-4 text-center text-sm text-muted-foreground">No distributors yet — add them in “Distributor Names” above.</div>}
+          </div>
+        </div>
+
+        {/* Distributor Access — link distributor logins to a distributor */}
+        <div className="rounded-xl border border-border bg-card p-4 lg:col-span-2">
+          <h3 className="mb-1 text-sm font-semibold">Distributor Access</h3>
+          <p className="mb-3 text-[11px] text-muted-foreground">Accounts created with the “Distributor” account type can only open Distributor Incoming Orders and the Distributor Orders section (view only). Assign each one to a distributor to decide which orders it can see; leave unassigned to see none. Admins receive a notification whenever a distributor places an order.</p>
+          {users.filter((u) => u.role === "distributor").length === 0 ? (
+            <div className="py-4 text-center text-sm text-muted-foreground">No distributor accounts yet — create one from the Sign Up page with Account Type “Distributor”.</div>
+          ) : (
+            <div className="space-y-2">
+              {users.filter((u) => u.role === "distributor").map((u) => (
+                <div key={u.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3 text-sm">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{u.full_name || u.email || u.id}</div>
+                    <div className="text-[11px] text-muted-foreground">{u.email || "No email on profile"}</div>
+                  </div>
+                  <Select value={u.distributor_id || "none"} onValueChange={(v) => assignDistributorAccount(u, v === "none" ? null : v)}>
+                    <SelectTrigger className="w-64"><SelectValue placeholder="Assign distributor" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Unassigned (no access)</SelectItem>
+                      {distributors.map((d) => <SelectItem key={d.id} value={d.id}>{d.distributor_name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Data management */}

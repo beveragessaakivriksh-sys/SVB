@@ -8,14 +8,15 @@ import { FileText, Package, LayoutDashboard, Factory, BarChart3, Users, Settings
 import { startPeriodicTracking, stopPeriodicTracking, checkLocationPermission, requestLocationPermission } from "@/lib/locationService";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import NotificationBell from "@/components/NotificationBell";
 
 const ALL_TABS = [
   { to: "/daily-summary", label: "Daily Summary", icon: CalendarClock, roles: ["admin", "user"] },
   { to: "/bill-entries", label: "Bill Entries", icon: FileText, roles: ["admin", "user"] },
   { to: "/crates-entries", label: "Crates", icon: Package, roles: ["admin", "user"] },
-  { to: "/orders", label: "Orders", icon: ClipboardList, roles: ["admin", "user"] },
+  { to: "/orders", label: "Orders", icon: ClipboardList, roles: ["admin", "user", "distributor"] },
   { to: "/new-delivery", label: "Incoming Orders", icon: Inbox, roles: ["admin", "user"] },
-  { to: "/distributor-incoming-orders", label: "Distributor Incoming Orders", icon: Inbox, roles: ["admin", "user"] },
+  { to: "/distributor-incoming-orders", label: "Distributor Incoming Orders", icon: Inbox, roles: ["admin", "user", "distributor"] },
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin"] },
   { to: "/daily-production", label: "Production", icon: Factory, roles: ["admin"] },
   { to: "/data-analytics", label: "Analysis", icon: BarChart3, roles: ["admin"] },
@@ -41,7 +42,7 @@ export default function Layout() {
       const perm = await checkLocationPermission();
       if (!active) return;
       setLocPerm(perm);
-      if (perm === "granted") startPeriodicTracking(u);
+      if (perm === "granted" && u.role !== "distributor") startPeriodicTracking(u);
     }).catch(() => {});
     return () => { active = false; stopPeriodicTracking(); };
   }, []);
@@ -69,6 +70,7 @@ export default function Layout() {
           <div className="font-semibold text-sm">SVB</div>
           <div className="text-[11px] text-muted-foreground">Saaki Vriksh Beverages</div>
         </div>
+        {user?.role === "admin" && <div className="ml-auto"><NotificationBell user={user} /></div>}
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {tabs.map((t) => {
@@ -118,15 +120,18 @@ export default function Layout() {
             <div className="h-7 w-7 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold text-xs">SV</div>
             <span className="font-semibold text-sm">SVB</span>
           </div>
+          <div className="flex items-center gap-1">
+            {user?.role === "admin" && <NotificationBell user={user} />}
           <button
             onClick={handleLogout}
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors select-none"
           >
             <LogOut className="h-4 w-4" /> Logout
           </button>
+          </div>
         </header>
 
-        {user && locPerm !== "granted" && !locBannerDismissed && (
+        {user && user.role !== "distributor" && locPerm !== "granted" && !locBannerDismissed && (
           <div className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
             <MapPin className="h-4 w-4 shrink-0" />
             <span className="flex-1">Enable location access to log your route breadcrumbs and allow live tracking.</span>

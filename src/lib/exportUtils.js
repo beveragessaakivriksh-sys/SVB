@@ -1,4 +1,5 @@
 import { SUPPLIER, BANK_NOTES, TERMS_GST, TERMS_NON_GST, CGST_RATE, SGST_RATE, HSN_SAC, bottlesPerCrate } from "./constants";
+import { isDistributorParty } from "./partyUtils";
 
 const FALSE = "FALSE";
 const NO = "NO";
@@ -178,6 +179,21 @@ export function buildGstZohoRows(bill, customer) {
     rows.push(GST_ZOHO_COLUMNS.map((c) => row[c] ?? ""));
   });
   return rows;
+}
+
+// Export split used by the Bill Entries tab:
+//   * GST CSV      -> GST customer bills only (a distributor bill is never a
+//                    GST export bill, even if its hotel is GST-registered).
+//   * Non-GST CSV  -> everything else: plain non-GST customer bills AND all
+//                    distributor bills (GST or non-GST).
+// Keeping this in one pure helper means the two downloads are mutually
+// exclusive and no bill is silently dropped or exported twice.
+export function isGstExportBill(bill) {
+  return !!bill?.has_gst && !isDistributorParty(bill);
+}
+
+export function isNonGstExportBill(bill) {
+  return !!bill && !isGstExportBill(bill);
 }
 
 export const NON_GST_COLUMNS = [

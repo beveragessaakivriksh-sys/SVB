@@ -16,6 +16,7 @@
 //   Distributor     -> distributors
 //   DistributorHotel -> distributor_hotels (hotels under a distributor)
 //   InvoiceSeries   -> invoice_series
+//   Notification    -> notifications
 //   Order           -> orders
 //   Product         -> products
 //   User            -> profiles (read-only list, used to show driver/user names)
@@ -32,6 +33,7 @@ const TABLES = {
   Distributor: "distributors",
   DistributorHotel: "distributor_hotels",
   InvoiceSeries: "invoice_series",
+  Notification: "notifications",
   Order: "orders",
   Product: "products",
   User: "profiles",
@@ -141,9 +143,10 @@ const auth = {
     return data;
   },
 
-  // Registers a new account. The chosen account type ("user"/"admin") is
-  // carried in signup metadata and applied by the `handle_new_user` trigger
-  // (see supabase/migrations/001_initial_schema.sql and 004_admin_signup_no_approval.sql).
+  // Registers a new account. The chosen account type ("user"/"admin"/
+  // "distributor") is carried in signup metadata and applied by the
+  // `handle_new_user` trigger (see 004_admin_signup_no_approval.sql and
+  // 011_distributor_access_and_notifications.sql).
   async register({ email, password, role }) {
     const { data, error } = await supabase.auth.signUp({
       email,

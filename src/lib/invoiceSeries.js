@@ -1,3 +1,4 @@
+import supabase from "@/lib/supabaseClient";
 import { db } from "@/api/db";
 
 import { padNumber } from "./billUtils";
@@ -9,8 +10,8 @@ export const DEFAULT_SERIES = {
   // Internal series: numbers the internal orders created in Incoming Orders.
   // The real (GST / Non-GST) invoice number is only taken at dispatch.
   internal: { type: "internal", prefix: "INT-", series_name: "Internal Series", next_number: 1, padding: 4 },
-  // Distributor series: the real invoice number assigned when a distributor
-  // order is dispatched from the Orders tab.
+  // Legacy shared distributor series. Kept as a fallback for distributors that
+  // have no per-distributor series configured yet (migration 011).
   distributor: { type: "distributor", prefix: "DST-", series_name: "Distributors Invoice Number", next_number: 1001, padding: 4 },
 };
 
@@ -46,9 +47,52 @@ export async function nextInternalNumber() {
   return { number, seriesName: ser.series_name };
 }
 
-// Generates the next DISTRIBUTOR invoice number. Used when a distributor
-// order is dispatched from Orders and moves into Bill Entries.
-export async function nextDistributorInvoiceNumber() {
+// A readable default prefix derived from the distributor name, e.g.
+// "Shree Beverages" -> "SB-". Unique-looking names get unique-looking series.
+export function defaultDistributorPrefix(name = "") {
+  const initials = String(name)
+    .trim()
+    .split(/\s+/)
+    .map((word) => word[0])
+    .join("")
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase()
+    .slice(0, 4);
+  return `${initials || "DIST"}-`;
+}
+
+// Generates the next DISTRIBUTOR invoice number.
+//
+// Every distributor owns its own prefix + counter (fields on the distributor
+// row, editable in Settings → Distributor Invoice Numbers), so two
+// distributors never share an invoice number sequence. The counter increment
+// is done atomically by the `next_distributor_invoice_number` SQL function;
+// the JS fallback keeps the app working if that migration has not been run.
+export async function nextDistributorInvoiceNumber(distributor) {
+  if (distributor?.id) {
+    const prefix = distributor.invoice_prefix || defaultDistributorPrefix(distributor.distributor_name || distributor.display_name);
+    const next = Number(distributor.invoice_next_number) || 1001;
+    const padding = Number(distributor.invoice_padding) || 4;
+    const seriesName = distributor.series_name || `${prefix}Distributor Series`;
+
+    try {
+      const { data, error } = await supabase.rpc("next_distributor_invoice_number", { p_distributor_id: distributor.id });
+      if (!error && data) return { number: String(data), seriesName };
+    } catch {
+      // Fall through to the client-side fallback below.
+    }
+
+    const number = `${prefix}${padNumber(next, padding)}`;
+    try {
+      await db.entities.Distributor.update(distributor.id, { invoice_next_number: next + 1 });
+    } catch {
+      // Best-effort: still return a usable number when the row cannot be
+      // written (e.g. RLS not applied yet).
+    }
+    return { number, seriesName };
+  }
+
+  // Legacy fallback for an order whose distributor record was deleted.
   const ser = await ensureInvoiceSeries("distributor");
   const number = `${ser.prefix}${padNumber(ser.next_number, ser.padding)}`;
   await db.entities.InvoiceSeries.update(ser.id, { next_number: (Number(ser.next_number) || 0) + 1 });

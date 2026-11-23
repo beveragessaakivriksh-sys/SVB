@@ -9,6 +9,7 @@ import ScrollToTop from './components/ScrollToTop';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import Layout from '@/components/Layout';
 import AdminRoute from '@/components/AdminRoute';
+import RoleRoute from '@/components/RoleRoute';
 // Auth pages
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
@@ -53,21 +54,29 @@ const AuthenticatedApp = () => {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
-        <Route element={<Layout />}>
-          <Route path="/" element={<DailySummaryPage />} />
-          <Route path="/new-delivery" element={<NewDelivery />} />
-          <Route path="/distributor-incoming-orders" element={<DistributorIncomingOrders />} />
-          <Route path="/bill-entries" element={<BillEntries />} />
-          <Route path="/crates-entries" element={<CratesEntries />} />
-          <Route path="/orders" element={<Orders />} />
-          <Route path="/daily-summary" element={<DailySummaryPage />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/daily-production" element={<DailyProduction />} />
-          <Route path="/data-analytics" element={<DataAnalytics />} />
-          <Route path="/customers" element={<AdminRoute><Customers /></AdminRoute>} />
-          <Route path="/distributors" element={<AdminRoute><Distributors /></AdminRoute>} />
-          <Route path="/location-tracking" element={<AdminRoute><LocationTracking /></AdminRoute>} />
-          <Route path="/settings" element={<AdminRoute><Settings /></AdminRoute>} />
+        {/* The only two screens a distributor account may reach. */}
+        <Route element={<RoleRoute roles={["admin", "user", "distributor"]} />}>
+          <Route element={<Layout />}>
+            <Route path="/distributor-incoming-orders" element={<DistributorIncomingOrders />} />
+            <Route path="/orders" element={<Orders />} />
+          </Route>
+        </Route>
+        {/* All remaining screens are staff-only. */}
+        <Route element={<RoleRoute roles={["admin", "user"]} />}>
+          <Route element={<Layout />}>
+            <Route path="/" element={<DailySummaryPage />} />
+            <Route path="/new-delivery" element={<NewDelivery />} />
+            <Route path="/bill-entries" element={<BillEntries />} />
+            <Route path="/crates-entries" element={<CratesEntries />} />
+            <Route path="/daily-summary" element={<DailySummaryPage />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/daily-production" element={<DailyProduction />} />
+            <Route path="/data-analytics" element={<DataAnalytics />} />
+            <Route path="/customers" element={<AdminRoute><Customers /></AdminRoute>} />
+            <Route path="/distributors" element={<AdminRoute><Distributors /></AdminRoute>} />
+            <Route path="/location-tracking" element={<AdminRoute><LocationTracking /></AdminRoute>} />
+            <Route path="/settings" element={<AdminRoute><Settings /></AdminRoute>} />
+          </Route>
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />

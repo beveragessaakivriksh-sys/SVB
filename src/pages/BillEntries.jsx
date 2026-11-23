@@ -11,7 +11,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import ThermalPreview from "@/components/ThermalPreview";
 import BillSummary from "@/components/BillSummary";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
-import { downloadCsv, buildGstZohoRows, GST_ZOHO_COLUMNS, buildNonGstRows, NON_GST_COLUMNS } from "@/lib/exportUtils";
+import { downloadCsv, buildGstZohoRows, GST_ZOHO_COLUMNS, buildNonGstRows, NON_GST_COLUMNS, isGstExportBill, isNonGstExportBill } from "@/lib/exportUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -128,16 +128,19 @@ export default function BillEntries() {
   }, [bills, specificDate, from, to, filterCustomer, showAll]);
 
   const exportGst = () => {
-    const gstBills = filtered.filter((b) => b.has_gst);
+    // GST CSV: GST customer bills only. Distributor bills go in the Non-GST
+    // CSV even when the distributor's hotel is GST-registered.
+    const gstBills = filtered.filter(isGstExportBill);
     const rows = gstBills.flatMap((b) => buildGstZohoRows(b, partyOf(b)));
     if (!rows.length) return toast({ variant: "destructive", title: "No GST bills in range" });
     downloadCsv(GST_ZOHO_COLUMNS, rows, `gst_bills_${from}_to_${to}.csv`);
   };
 
   const exportNonGst = () => {
-    const ngBills = filtered.filter((b) => !b.has_gst);
+    // Non-GST CSV: ordinary non-GST bills plus ALL distributor bills.
+    const ngBills = filtered.filter(isNonGstExportBill);
     const rows = ngBills.flatMap((b) => buildNonGstRows(b, partyOf(b)));
-    if (!rows.length) return toast({ variant: "destructive", title: "No non-GST bills in range" });
+    if (!rows.length) return toast({ variant: "destructive", title: "No non-GST or distributor bills in range" });
     downloadCsv(NON_GST_COLUMNS, rows, `nongst_bills_${from}_to_${to}.csv`);
   };
 
@@ -306,8 +309,8 @@ export default function BillEntries() {
       actions={
         <>
           <Button variant="outline" onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today's Order</Button>
-          <Button variant="outline" onClick={exportGst}><Download className="h-4 w-4 mr-2" /> GST CSV</Button>
-          <Button variant="outline" onClick={exportNonGst}><Download className="h-4 w-4 mr-2" /> Non-GST CSV</Button>
+          <Button variant="outline" title="GST customer bills only" onClick={exportGst}><Download className="h-4 w-4 mr-2" /> GST CSV</Button>
+          <Button variant="outline" title="Non-GST customer bills and all distributor bills" onClick={exportNonGst}><Download className="h-4 w-4 mr-2" /> Non-GST CSV</Button>
           <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
           <Button variant={showAll ? "default" : "outline"} onClick={() => setShowAll(s => !s)}><History className="h-4 w-4 mr-2" /> {showAll ? "Date Range" : "Show All"}</Button>
           <Button onClick={openSummary}><ListChecks className="h-4 w-4 mr-2" /> Summary</Button>

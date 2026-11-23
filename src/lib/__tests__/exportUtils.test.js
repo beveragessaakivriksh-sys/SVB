@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGstZohoRows, buildNonGstRows, GST_ZOHO_COLUMNS, NON_GST_COLUMNS } from "../exportUtils";
+import { buildGstZohoRows, buildNonGstRows, GST_ZOHO_COLUMNS, NON_GST_COLUMNS, isGstExportBill, isNonGstExportBill } from "../exportUtils";
 
 const bill = {
   invoice_number: "INV-1001",
@@ -28,6 +28,34 @@ describe("exportUtils", () => {
     const pet = rows[1][GST_ZOHO_COLUMNS.indexOf("Quantity")];
     expect(goli).toBe(2 * 24 + 3);
     expect(pet).toBe(1 * 30 + 4);
+  });
+
+  it("sends GST customer bills only to the GST CSV", () => {
+    expect(isGstExportBill({ has_gst: true, customer_id: "c1" })).toBe(true);
+    expect(isGstExportBill({ has_gst: false, customer_id: "c1" })).toBe(false);
+    // A GST-flagged distributor bill is NOT a GST export bill.
+    expect(isGstExportBill({ has_gst: true, party_type: "distributor", distributor_id: "d1" })).toBe(false);
+    expect(isGstExportBill({ has_gst: true, distributor_hotel_id: "h1" })).toBe(false);
+  });
+
+  it("sends non-GST bills and every distributor bill to the Non-GST CSV", () => {
+    expect(isNonGstExportBill({ has_gst: false, customer_id: "c1" })).toBe(true);
+    expect(isNonGstExportBill({ has_gst: true, customer_id: "c1" })).toBe(false);
+    expect(isNonGstExportBill({ has_gst: false, party_type: "distributor", distributor_id: "d1" })).toBe(true);
+    expect(isNonGstExportBill({ has_gst: true, party_type: "distributor", distributor_id: "d1" })).toBe(true);
+    expect(isNonGstExportBill({ has_gst: true, distributor_hotel_id: "h1" })).toBe(true);
+  });
+
+  it("keeps the two CSV exports mutually exclusive", () => {
+    const bills = [
+      { has_gst: true, customer_id: "c1" },
+      { has_gst: false, customer_id: "c2" },
+      { has_gst: true, distributor_id: "d1" },
+      { has_gst: false, distributor_id: "d2" },
+    ];
+    bills.forEach((b) => expect(isGstExportBill(b) && isNonGstExportBill(b)).toBe(false));
+    expect(bills.filter(isGstExportBill)).toHaveLength(1);
+    expect(bills.filter(isNonGstExportBill)).toHaveLength(3);
   });
 
   it("falls back to hotel or distributor names for the bill-to party", () => {

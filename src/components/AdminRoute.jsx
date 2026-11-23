@@ -26,7 +26,7 @@ export default function AdminRoute({ children }) {
   }
 
   if (user?.role !== "admin") {
-    return <Navigate to="/new-delivery" replace />;
+    return <Navigate to={user?.role === "distributor" ? "/distributor-incoming-orders" : "/new-delivery"} replace />;
   }
 
   return children;

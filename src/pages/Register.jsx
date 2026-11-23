@@ -46,8 +46,9 @@ export default function Register() {
     try {
       // The account type chosen above rode along as signup metadata and was
       // already applied to `profiles.role` by the `handle_new_user` trigger
-      // (see supabase/migrations/004_admin_signup_no_approval.sql) — admin is
-      // applied immediately, no separate role-setting call or approval needed.
+      // (see supabase/migrations/004_admin_signup_no_approval.sql and
+      // 011_distributor_access_and_notifications.sql) — the role is applied
+      // immediately, no separate role-setting call or approval needed.
       await db.auth.verifyOtp({ email, otpCode });
       window.location.href = safeReturnTo();
     } catch (err) {
@@ -199,11 +200,12 @@ export default function Register() {
         </div>
         <div className="space-y-2">
           <Label>Account Type</Label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <button type="button" onClick={() => setRole("user")} className={`h-11 rounded-md border text-sm font-medium transition-colors ${role === "user" ? "border-primary bg-primary/10 text-primary" : "border-input text-muted-foreground"}`}>User</button>
             <button type="button" onClick={() => setRole("admin")} className={`h-11 rounded-md border text-sm font-medium transition-colors ${role === "admin" ? "border-primary bg-primary/10 text-primary" : "border-input text-muted-foreground"}`}>Admin</button>
+            <button type="button" onClick={() => setRole("distributor")} className={`h-11 rounded-md border text-sm font-medium transition-colors ${role === "distributor" ? "border-primary bg-primary/10 text-primary" : "border-input text-muted-foreground"}`}>Distributor</button>
           </div>
-          <p className="text-[11px] text-muted-foreground">User = operational tabs only. Admin = all tabs, applied immediately (no approval needed).</p>
+          <p className="text-[11px] text-muted-foreground">User = operational tabs. Admin = all tabs. Distributor = only Distributor Incoming Orders and the Distributor Orders section (view-only). An admin links the account to a distributor in Settings → Distributor Access.</p>
         </div>
         <Button type="submit" className="w-full h-12 font-medium" disabled={loading}>
           {loading ? (

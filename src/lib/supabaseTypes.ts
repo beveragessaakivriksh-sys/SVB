@@ -2,7 +2,7 @@
 // TypeScript interfaces mirroring supabase/migrations/001_initial_schema.sql
 // Used to type the Supabase client (see supabaseClient.ts).
 
-export type Role = "admin" | "user";
+export type Role = "admin" | "user" | "distributor";
 export type PaymentStatus = "completed" | "pending";
 export type DispatchStatus = "pending" | "dispatched";
 export type DeliveryStatus = "pending" | "delivered";
@@ -26,8 +26,20 @@ export interface Profile {
   email: string | null;
   full_name: string | null;
   role: Role;
+  // Set for "distributor" accounts: the distributor whose orders they may see.
+  distributor_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  title: string;
+  body: string;
+  data: Record<string, unknown>;
+  read: boolean;
+  created_at: string;
 }
 
 export interface Customer {
@@ -98,6 +110,10 @@ export interface Distributor {
   closing_stock_crates: number;
   closing_stock_loose: number;
   product_prices: Record<string, { selling_price?: number; mrp?: number }>;
+  // Per-distributor invoice number series (migration 011).
+  invoice_prefix: string;
+  invoice_next_number: number;
+  invoice_padding: number;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -285,6 +301,7 @@ export interface Order {
   invoice_number: string | null;
   invoice_series: string | null;
   order_date: string;
+  delivery_date: string | null;
   items: BillItem[];
   total_bottles: number;
   total_amount: number;
@@ -339,6 +356,7 @@ export interface Database {
       distributor_hotels: { Row: DistributorHotel; Insert: Partial<DistributorHotel>; Update: Partial<DistributorHotel> };
       products: { Row: Product; Insert: Partial<Product>; Update: Partial<Product> };
       invoice_series: { Row: InvoiceSeries; Insert: Partial<InvoiceSeries>; Update: Partial<InvoiceSeries> };
+      notifications: { Row: Notification; Insert: Partial<Notification>; Update: Partial<Notification> };
       bills: { Row: Bill; Insert: Partial<Bill>; Update: Partial<Bill> };
       deliveries: { Row: Delivery; Insert: Partial<Delivery>; Update: Partial<Delivery> };
       crate_entries: { Row: CrateEntry; Insert: Partial<CrateEntry>; Update: Partial<CrateEntry> };

@@ -26,7 +26,13 @@ export default function DistributorIncomingOrders() {
   const [distributorId, setDistributorId] = useState("");
   const [hotelId, setHotelId] = useState("");
   const [orderDate, setOrderDate] = useState(todayISO());
+  const [deliveryDate, setDeliveryDate] = useState(todayISO());
   const [items, setItems] = useState(buildItemsFromProductList(productList));
+  // Distributor accounts can only raise orders for their own distributor.
+  const isDistributorUser = user?.role === "distributor";
+  const visibleDistributors = isDistributorUser
+    ? distributors.filter((d) => d.id === user?.distributor_id)
+    : distributors;
   const [saving, setSaving] = useState(false);
 
   // Distributor names come from Settings / the Distributors tab; their hotels
@@ -40,6 +46,13 @@ export default function DistributorIncomingOrders() {
       setHotels(sortPartiesAlpha(h));
     }).catch(() => {});
   }, []);
+
+  // Lock a distributor account to the distributor assigned in Settings.
+  useEffect(() => {
+    if (isDistributorUser && user?.distributor_id && distributorId !== user.distributor_id) {
+      setDistributorId(user.distributor_id);
+    }
+  }, [isDistributorUser, user?.distributor_id, distributorId]);
 
   // Keep the item matrix in sync with managed products (Settings), preserving
   // any quantities the user has already entered for matching SKUs.
@@ -77,6 +90,7 @@ export default function DistributorIncomingOrders() {
   const handleSave = async () => {
     if (!distributor) return toast({ variant: "destructive", title: "Select a distributor" });
     if (!hotel) return toast({ variant: "destructive", title: "Select a hotel" });
+    if (!deliveryDate) return toast({ variant: "destructive", title: "Select a delivery date" });
     if (activeItems.length === 0) return toast({ variant: "destructive", title: "Add at least one item" });
     setSaving(true);
     try {
@@ -104,6 +118,7 @@ export default function DistributorIncomingOrders() {
         invoice_number: null,
         invoice_series: null,
         order_date: orderDate,
+        delivery_date: deliveryDate,
         items: itemsWithAmount,
         total_bottles: totalBottles,
         total_amount: totals.total,
@@ -136,7 +151,7 @@ export default function DistributorIncomingOrders() {
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           <div className="rounded-xl border border-primary/20 bg-white p-4">
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-4">
               <div>
                 <Label>Distributor</Label>
                 <Select
@@ -145,7 +160,7 @@ export default function DistributorIncomingOrders() {
                 >
                   <SelectTrigger><SelectValue placeholder="Select distributor" /></SelectTrigger>
                   <SelectContent>
-                    {distributors.map((d) => (
+                    {visibleDistributors.map((d) => (
                       <SelectItem key={d.id} value={d.id}>
                         {d.display_name || d.distributor_name}
                       </SelectItem>
@@ -172,6 +187,11 @@ export default function DistributorIncomingOrders() {
               <div>
                 <Label>Order Date</Label>
                 <Input type="date" value={orderDate} onChange={(e) => setOrderDate(e.target.value)} />
+              </div>
+              <div>
+                <Label>Delivery Date</Label>
+                <Input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} />
+                <p className="mt-1 text-[10px] text-muted-foreground">Used when the order is dispatched.</p>
               </div>
             </div>
           </div>

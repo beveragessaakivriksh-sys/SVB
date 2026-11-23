@@ -24,7 +24,7 @@ import { useToast } from "@/components/ui/use-toast";
 // One independent Orders section. The page renders two of these — customer
 // orders and distributor orders — so each has its own filters, selection,
 // summary, clone, dispatch, modify, delete and PDF options.
-function OrderSection({ kind, orders, bills, deliveries, customersById, distributorsById, distributorHotelsById, partyOptions, load, categories, flavoursByCategory, productList }) {
+function OrderSection({ kind, orders, bills, deliveries, customersById, distributorsById, distributorHotelsById, partyOptions, load, categories, flavoursByCategory, productList, readOnly = false }) {
   const user = useCurrentUser();
   const { toast } = useToast();
   const [specificDate, setSpecificDate] = useState("");
@@ -44,10 +44,16 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
   const isDistributorSection = kind === "distributor";
   const partyOf = (order) => resolveParty(order, customersById, distributorsById, distributorHotelsById);
 
-  const sectionOrders = useMemo(
-    () => orders.filter((o) => isDistributorParty(o) === isDistributorSection),
-    [orders, isDistributorSection]
-  );
+  const sectionOrders = useMemo(() => {
+    let list = orders.filter((o) => isDistributorParty(o) === isDistributorSection);
+    // A distributor account may only view its own orders — read-only.
+    if (readOnly && user?.role === "distributor" && user?.distributor_id) {
+      list = list.filter(
+        (o) => o.distributor_id === user.distributor_id || distributorHotelsById[o.distributor_hotel_id]?.distributor_id === user.distributor_id
+      );
+    }
+    return list;
+  }, [orders, isDistributorSection, readOnly, user?.role, user?.distributor_id, distributorHotelsById]);
 
   const partySelected = filterCustomer !== "all";
   const filtered = useMemo(() => {
@@ -243,10 +249,13 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
       // orders use the dedicated Distributors Invoice Number series.
       const distributorOrder = isDistributorParty(o);
       const party = partyOf(o);
+      // Resolve the parent distributor even when the order is for one of its
+      // hotels — the per-distributor invoice series lives on the distributor.
+      const orderDistributor = distributorsById[o.distributor_id] || distributorsById[distributorHotelsById[o.distributor_hotel_id]?.distributor_id];
       let invoiceNo = o.invoice_number;
       let seriesName = o.invoice_series;
       if (!invoiceNo) {
-        const next = distributorOrder ? await nextDistributorInvoiceNumber() : await nextInvoiceNumber(o.has_gst);
+        const next = distributorOrder ? await nextDistributorInvoiceNumber(orderDistributor) : await nextInvoiceNumber(o.has_gst);
         invoiceNo = next.number;
         seriesName = next.seriesName;
       }
@@ -299,13 +308,15 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
         modified_by_name: user?.email || "unknown",
       };
       const bill = await db.entities.Bill.create(billData);
+      // Honour the delivery date chosen in the Distributor Incoming Orders tab.
+      const deliveryDate = o.delivery_date || date;
       const delivery = await db.entities.Delivery.create({
         customer_id: distributorOrder ? null : o.customer_id,
         distributor_id: distributorOrder ? o.distributor_id : null,
         distributor_hotel_id: distributorOrder ? o.distributor_hotel_id : null,
         party_type: distributorOrder ? "distributor" : "customer",
         customer_name: partyTitle,
-        delivery_date: date,
+        delivery_date: deliveryDate,
         payment_status: "pending",
         items,
         returned_crates: 0,
@@ -464,7 +475,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" disabled={busy} onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today</Button>
+            {!readOnly && <Button variant="outline" disabled={busy} onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today</Button>}
             <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
             <Button onClick={openSummary}><ListChecks className="h-4 w-4 mr-2" /> Summary</Button>
           </div>
@@ -494,6 +505,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
               <th className="p-3 w-10"><input type="checkbox" checked={allChecked} onChange={toggleAll} className="h-4 w-4 cursor-pointer" /></th>
               <th className="p-3">Internal #</th>
               <th className="p-3">Date</th>
+              {isDistributorSection && <th className="p-3">Delivery Date</th>}
               <th className="p-3">{isDistributorSection ? "Distributor / Hotel" : "Customer"}</th>
               <th className="p-3">Type</th>
               <th className="p-3 text-right">Bottles</th>
@@ -509,6 +521,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
                 </td>
                 <td className="p-3 font-medium text-primary">{o.internal_invoice_number}</td>
                 <td className="p-3">{o.order_date}</td>
+                {isDistributorSection && <td className="p-3">{o.delivery_date || "—"}</td>}
                 <td className="p-3">
                   {o.display_name || o.customer_name}
                   {isDistributorParty(o) && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Distributor</span>}
@@ -523,7 +536,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
                 <td className="p-3 text-xs text-muted-foreground">{o.created_by_name}</td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={8} className="p-6 text-center text-muted-foreground">No orders in this range</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={isDistributorSection ? 9 : 8} className="p-6 text-center text-muted-foreground">No orders in this range</td></tr>}
           </tbody>
         </table>
       </div>
@@ -536,6 +549,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
             <div className="max-h-[65vh] space-y-4 overflow-y-auto">
               <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
                 <div><span className="text-muted-foreground">Order Date</span><div className="font-medium">{selected.order_date}</div></div>
+                {isDistributorSection && <div><span className="text-muted-foreground">Delivery Date</span><div className="font-medium">{selected.delivery_date || "—"}</div></div>}
                 <div><span className="text-muted-foreground">Party</span><div className="font-medium">{isDistributorParty(selected) ? "Distributor" : "Customer"}</div></div>
                 <div><span className="text-muted-foreground">Type</span><div className="font-medium">{selected.has_gst ? "GST" : "Non-GST"}</div></div>
                 <div><span className="text-muted-foreground">Total Bottles</span><div className="font-medium">{selected.total_bottles || 0}</div></div>
@@ -566,17 +580,21 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-2">
-                <Button disabled={busy} variant={selected.dispatch_status === "dispatched" ? "default" : "outline"} onClick={() => dispatch(selected)}>
-                  <Truck className="h-4 w-4 mr-2" /> {selected.dispatch_status === "dispatched" ? "Unmark Dispatch" : "Mark Dispatched"}
-                </Button>
-                <Button variant="outline" onClick={() => openModify(selected)}>
-                  <Pencil className="h-4 w-4 mr-2" /> Modify
-                </Button>
-                <Button variant="destructive" disabled={busy} onClick={() => deleteOrder(selected)}>
-                  <Trash2 className="h-4 w-4 mr-2" /> Delete
-                </Button>
-              </div>
+              {!readOnly ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button disabled={busy} variant={selected.dispatch_status === "dispatched" ? "default" : "outline"} onClick={() => dispatch(selected)}>
+                    <Truck className="h-4 w-4 mr-2" /> {selected.dispatch_status === "dispatched" ? "Unmark Dispatch" : "Mark Dispatched"}
+                  </Button>
+                  <Button variant="outline" onClick={() => openModify(selected)}>
+                    <Pencil className="h-4 w-4 mr-2" /> Modify
+                  </Button>
+                  <Button variant="destructive" disabled={busy} onClick={() => deleteOrder(selected)}>
+                    <Trash2 className="h-4 w-4 mr-2" /> Delete
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Distributor access is view-only. Contact an admin to modify or dispatch orders.</p>
+              )}
             </div>
           )}
         </DialogContent>
@@ -772,6 +790,8 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
 
 export default function Orders() {
   const { categories, flavoursByCategory, productList } = useProducts();
+  const user = useCurrentUser();
+  const isDistributorUser = user?.role === "distributor";
   const [orders, setOrders] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [distributors, setDistributors] = useState([]);
@@ -842,12 +862,12 @@ export default function Orders() {
   return (
     <PageShell
       title="Orders"
-      subtitle="Internal invoices — customer and distributor orders are shown in separate sections"
+      subtitle={isDistributorUser ? "Your distributor orders (view only)" : "Internal invoices — customer and distributor orders are shown in separate sections"}
     >
       <div className="space-y-10">
-        <OrderSection kind="customer" partyOptions={customerOptions} {...sectionProps} />
-        <div className="border-t border-border pt-8">
-          <OrderSection kind="distributor" partyOptions={distributorOptions} {...sectionProps} />
+        {!isDistributorUser && <OrderSection kind="customer" partyOptions={customerOptions} {...sectionProps} />}
+        <div className={isDistributorUser ? "" : "border-t border-border pt-8"}>
+          <OrderSection kind="distributor" partyOptions={distributorOptions} readOnly={isDistributorUser} {...sectionProps} />
         </div>
       </div>
     </PageShell>
