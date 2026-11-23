@@ -58,6 +58,14 @@ function weekdayLabel(iso) {
   });
 }
 
+function shortDayLabel(iso) {
+  return new Date(dayNumber(iso) * DAY_MS).toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
 function monthDayLabel(iso) {
   return String(iso || "").slice(5);
 }
