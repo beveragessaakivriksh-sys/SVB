@@ -1376,3 +1376,302 @@ GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO authenticated;
 -- ===================================================================
 -- End of migration
 -- ===================================================================
+
+
+-- ============================== 011_distributors.sql ==============================
+
+-- =====================================================================
+-- SVB � Distributors & distributor invoices
+-- File: supabase/migrations/011_distributors.sql
+--
+-- Adds:
+--   * public.distributors � same GST/billing/pricing shape as customers.
+--   * orders.distributor_id / party_type � distributor orders share the
+--     Orders tab but are marked as distributor parties.
+--   * bills.distributor_id / party_type � dispatched distributor orders
+--     land in Bill Entries using the dedicated distributor series.
+--   * deliveries.distributor_id / party_type.
+--   * invoice_series type 'distributor' and its default series (DST-1001).
+--
+-- Safe to run more than once.
+-- =====================================================================
+
+-- ------------------------------------------------------------------
+-- DISTRIBUTORS
+-- ------------------------------------------------------------------
+create table if not exists public.distributors (
+  id                         uuid primary key default uuid_generate_v4(),
+  user_id                    uuid references auth.users(id) on delete cascade,
+  distributor_name           text not null,
+  display_name               text,
+  has_gst                    boolean not null default false,
+  place_of_supply            text,
+  place_of_supply_state_code text,
+  gst_treatment              text,
+  gstin                      text,
+  billing_attention          text,
+  billing_address            text,
+  billing_street2            text,
+  billing_city               text,
+  billing_state              text,
+  billing_country            text default 'India',
+  billing_code               text,
+  shipping_attention         text,
+  shipping_address           text,
+  shipping_street2           text,
+  shipping_city              text,
+  shipping_state             text,
+  shipping_country           text default 'India',
+  shipping_code              text,
+  goli_fizz_mrp              numeric not null default 0,
+  goli_blast_mrp             numeric not null default 0,
+  petbottle_mrp              numeric not null default 0,
+  payment_terms_label        text default 'Due on Receipt',
+  closing_stock_crates       integer not null default 0,
+  closing_stock_loose        integer not null default 0,
+  product_prices             jsonb not null default '{}',
+  notes                      text,
+  created_at                 timestamptz not null default now(),
+  updated_at                 timestamptz not null default now()
+);
+
+drop trigger if exists trg_distributors_updated on public.distributors;
+create trigger trg_distributors_updated
+before update on public.distributors
+for each row execute function public.touch_updated_at();
+
+create index if not exists idx_distributors_user_id on public.distributors(user_id);
+
+alter table public.distributors enable row level security;
+
+drop policy if exists "distributors_select" on public.distributors;
+create policy "distributors_select" on public.distributors for select
+  using (user_id = auth.uid() or public.is_admin() or user_id is null);
+drop policy if exists "distributors_insert" on public.distributors;
+create policy "distributors_insert" on public.distributors for insert
+  with check (user_id = auth.uid() or public.is_admin());
+drop policy if exists "distributors_update" on public.distributors;
+create policy "distributors_update" on public.distributors for update
+  using (user_id = auth.uid() or public.is_admin() or user_id is null);
+drop policy if exists "distributors_delete" on public.distributors;
+create policy "distributors_delete" on public.distributors for delete
+  using (user_id = auth.uid() or public.is_admin() or user_id is null);
+
+-- ------------------------------------------------------------------
+-- ORDERS / BILLS / DELIVERIES � party discriminator
+-- ------------------------------------------------------------------
+alter table public.orders add column if not exists distributor_id uuid references public.distributors(id) on delete cascade;
+alter table public.orders add column if not exists party_type text not null default 'customer';
+alter table public.orders drop constraint if exists orders_party_type_check;
+alter table public.orders
+  add constraint orders_party_type_check check (party_type in ('customer','distributor'));
+
+alter table public.bills add column if not exists distributor_id uuid references public.distributors(id) on delete cascade;
+alter table public.bills add column if not exists party_type text not null default 'customer';
+alter table public.bills drop constraint if exists bills_party_type_check;
+alter table public.bills
+  add constraint bills_party_type_check check (party_type in ('customer','distributor'));
+
+alter table public.deliveries add column if not exists distributor_id uuid references public.distributors(id) on delete cascade;
+alter table public.deliveries add column if not exists party_type text not null default 'customer';
+alter table public.deliveries drop constraint if exists deliveries_party_type_check;
+alter table public.deliveries
+  add constraint deliveries_party_type_check check (party_type in ('customer','distributor'));
+
+create index if not exists idx_orders_distributor_id     on public.orders(distributor_id);
+create index if not exists idx_bills_distributor_id      on public.bills(distributor_id);
+create index if not exists idx_deliveries_distributor_id on public.deliveries(distributor_id);
+
+-- ------------------------------------------------------------------
+-- INVOICE SERIES � allow the distributor series
+-- ------------------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.invoice_series'::regclass
+      AND contype = 'u'
+      AND pg_get_constraintdef(oid) = 'UNIQUE (type)'
+  ) THEN
+    ALTER TABLE public.invoice_series ADD CONSTRAINT invoice_series_type_key UNIQUE (type);
+  END IF;
+END;
+$$;
+
+-- Drop the old CHECK on invoice_series.type (whatever it is named) ...
+DO $$
+DECLARE
+  c record;
+BEGIN
+  FOR c IN
+    SELECT conname
+    FROM pg_constraint
+    WHERE conrelid = 'public.invoice_series'::regclass
+      AND contype = 'c'
+      AND pg_get_constraintdef(oid) ILIKE '%non_gst%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.invoice_series DROP CONSTRAINT %I', c.conname);
+  END LOOP;
+END;
+$$;
+
+ALTER TABLE public.invoice_series DROP CONSTRAINT IF EXISTS invoice_series_type_check;
+ALTER TABLE public.invoice_series
+  ADD CONSTRAINT invoice_series_type_check CHECK (type IN ('gst', 'non_gst', 'internal', 'distributor'));
+
+INSERT INTO public.invoice_series (id, type, prefix, series_name, next_number, padding)
+VALUES (gen_random_uuid(), 'distributor', 'DST-', 'Distributors Invoice Number', 1001, 4)
+ON CONFLICT (type) DO NOTHING;
+
+-- Keep the server-side counter helper in step (the app itself increments the
+-- counter from the frontend; this RPC is optional).
+CREATE OR REPLACE FUNCTION public.next_invoice_number(p_type text)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_prefix text;
+  v_next numeric;
+  v_padding numeric;
+BEGIN
+  INSERT INTO public.invoice_series (id, type, prefix, series_name, next_number, padding)
+  VALUES (gen_random_uuid(),
+    p_type,
+    CASE p_type WHEN 'gst' THEN 'INV-' WHEN 'internal' THEN 'INT-' WHEN 'distributor' THEN 'DST-' ELSE 'NG-' END,
+    CASE p_type WHEN 'gst' THEN 'GST Series' WHEN 'internal' THEN 'Internal Series' WHEN 'distributor' THEN 'Distributors Invoice Number' ELSE 'Non-GST Series' END,
+    CASE p_type WHEN 'internal' THEN 1 ELSE 1001 END, 4)
+  ON CONFLICT (type) DO NOTHING;
+
+  UPDATE public.invoice_series
+  SET next_number = next_number + 1
+  WHERE type = p_type
+  RETURNING prefix, next_number - 1, padding INTO v_prefix, v_next, v_padding;
+
+  RETURN v_prefix || lpad(v_next::text, v_padding::int, '0');
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.next_invoice_number(text) TO authenticated;
+
+-- ===================================================================
+-- End of migration
+-- ===================================================================
+
+
+-- ============================== 012_distributor_hotels.sql ==============================
+
+-- =====================================================================
+-- SVB � Hotels belonging to a distributor
+-- File: supabase/migrations/012_distributor_hotels.sql
+--
+-- Adds:
+--   * public.distributor_hotels � hotels managed under a distributor in the
+--     Distributors tab. Same GST/billing/pricing shape as customers, but
+--     linked to a distributor rather than being global customers.
+--   * orders/bills/deliveries.distributor_hotel_id so a distributor order
+--     keeps the hotel it was entered for (the bill-to party).
+--
+-- Safe to run more than once.
+-- =====================================================================
+
+create table if not exists public.distributor_hotels (
+  id                         uuid primary key default uuid_generate_v4(),
+  user_id                    uuid references auth.users(id) on delete cascade,
+  distributor_id             uuid not null references public.distributors(id) on delete cascade,
+  hotel_name                 text not null,
+  display_name               text,
+  has_gst                    boolean not null default false,
+  place_of_supply            text,
+  place_of_supply_state_code text,
+  gst_treatment              text,
+  gstin                      text,
+  billing_attention          text,
+  billing_address            text,
+  billing_street2            text,
+  billing_city               text,
+  billing_state              text,
+  billing_country            text default 'India',
+  billing_code               text,
+  shipping_attention         text,
+  shipping_address           text,
+  shipping_street2           text,
+  shipping_city              text,
+  shipping_state             text,
+  shipping_country           text default 'India',
+  shipping_code              text,
+  goli_fizz_mrp              numeric not null default 0,
+  goli_blast_mrp             numeric not null default 0,
+  petbottle_mrp              numeric not null default 0,
+  payment_terms_label        text default 'Due on Receipt',
+  closing_stock_crates       integer not null default 0,
+  closing_stock_loose        integer not null default 0,
+  product_prices             jsonb not null default '{}',
+  notes                      text,
+  created_at                 timestamptz not null default now(),
+  updated_at                 timestamptz not null default now()
+);
+
+drop trigger if exists trg_distributor_hotels_updated on public.distributor_hotels;
+create trigger trg_distributor_hotels_updated
+before update on public.distributor_hotels
+for each row execute function public.touch_updated_at();
+
+create index if not exists idx_distributor_hotels_distributor_id on public.distributor_hotels(distributor_id);
+create index if not exists idx_distributor_hotels_user_id on public.distributor_hotels(user_id);
+
+alter table public.distributor_hotels enable row level security;
+
+drop policy if exists "distributor_hotels_select" on public.distributor_hotels;
+create policy "distributor_hotels_select" on public.distributor_hotels for select
+  using (user_id = auth.uid() or public.is_admin() or user_id is null);
+drop policy if exists "distributor_hotels_insert" on public.distributor_hotels;
+create policy "distributor_hotels_insert" on public.distributor_hotels for insert
+  with check (user_id = auth.uid() or public.is_admin());
+drop policy if exists "distributor_hotels_update" on public.distributor_hotels;
+create policy "distributor_hotels_update" on public.distributor_hotels for update
+  using (user_id = auth.uid() or public.is_admin() or user_id is null);
+drop policy if exists "distributor_hotels_delete" on public.distributor_hotels;
+create policy "distributor_hotels_delete" on public.distributor_hotels for delete
+  using (user_id = auth.uid() or public.is_admin() or user_id is null);
+
+-- ------------------------------------------------------------------
+-- Keep the hotel reference on the order / invoice / delivery
+-- ------------------------------------------------------------------
+alter table public.orders add column if not exists distributor_hotel_id uuid references public.distributor_hotels(id) on delete set null;
+alter table public.bills add column if not exists distributor_hotel_id uuid references public.distributor_hotels(id) on delete set null;
+alter table public.deliveries add column if not exists distributor_hotel_id uuid references public.distributor_hotels(id) on delete set null;
+
+create index if not exists idx_orders_distributor_hotel_id     on public.orders(distributor_hotel_id);
+create index if not exists idx_bills_distributor_hotel_id      on public.bills(distributor_hotel_id);
+create index if not exists idx_deliveries_distributor_hotel_id on public.deliveries(distributor_hotel_id);
+
+-- ===================================================================
+-- End of migration
+-- ===================================================================
+
+
+-- ============================== 013_production_opening_stock.sql ==============================
+
+-- =====================================================================
+-- SVB � Morning factory stock for the production plan
+-- File: supabase/migrations/013_production_opening_stock.sql
+--
+-- Adds a jsonb column to daily_productions holding the crates+loose counted
+-- at the factory in the morning, per category/flavour:
+--   [{ "category": "Goli Fizz", "flavour": "Orange", "crates": 2, "loose": 5 }]
+-- The production requirement is derived in the frontend from this stock and
+-- that day's orders, so no other table changes are needed.
+--
+-- Safe to run more than once.
+-- =====================================================================
+
+alter table public.daily_productions
+  add column if not exists opening_stock jsonb not null default '[]';
+
+comment on column public.daily_productions.opening_stock is
+  'Morning factory stock in crates + loose bottles per category/flavour.';
+
+-- ===================================================================
+-- End of migration
+-- ===================================================================

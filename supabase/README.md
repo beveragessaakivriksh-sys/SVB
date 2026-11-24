@@ -47,12 +47,13 @@ automatically take priority over the pasted values; see `.env.example`.)
 | Feature | Table(s) |
 | --- | --- |
 | Customers, GST, per-product pricing, manual closing stock | `customers` |
+| Distributors and their hotels | `distributors`, `distributor_hotels` |
 | Dynamic product catalogue | `products` |
 | Invoice numbering series | `invoice_series` |
 | Bills / invoices (GST + non-GST) | `bills` |
 | Deliveries | `deliveries` |
 | Crate returns (manual + auto from bills) | `crate_entries` (`source` = `manual` \| `bill`, `bill_id` links back) |
-| Daily production & factory closing stock | `daily_productions` |
+| Daily production â€” morning stock (crates+loose), produced, closing | `daily_productions` (`opening_stock` jsonb) |
 | Internal orders (Incoming Orders) | `orders` |
 | Per-user daily route summary | `daily_summaries` |
 | Live + breadcrumb location tracking | `live_locations`, `location_history` |

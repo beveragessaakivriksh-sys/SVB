@@ -5,6 +5,16 @@ Beverage distribution & inventory management app.
 - **Frontend:** React + Vite, deployed on Vercel.
 - **Backend:** Supabase (Postgres, Auth, Storage, Realtime, Edge Functions).
 
+## Production & Analysis (rebuilt)
+- **Production**: enter the morning factory stock as **crates + loose** for every
+  category/flavour. The page reads **all orders dated that day** (customer and
+  distributor/hotel, counting a dispatched order's invoice once) and calculates
+  **what still must be produced** â€” bottles and crates+loose â€” after subtracting
+  opening stock. Two tables show the day's order lines by hotel/distributor and
+  a per-flavour stock/demand/production summary.
+- **Analysis**: pick any future date from the calendar; the forecast (trained on
+  every previous order) predicts expected orders and bottles for that single
+  date, broken down by Goli Fizz / Goli Blast / Petbottle and each flavour.
 ## Deploy in 3 steps
 
 **1. Backend — Supabase**
@@ -56,6 +66,28 @@ numbering, payment balance) — the calculations every bill and invoice number
 in the app depends on. See `src/lib/__tests__/` for the test files; add more
 there as you touch other logic.
 
+## Deploy with the CLIs (Supabase + Vercel)
+
+For an existing Supabase project, apply only the new migrations:
+
+```bash
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
+npx supabase db query --linked --file supabase/migrations/011_distributors.sql
+npx supabase db query --linked --file supabase/migrations/012_distributor_hotels.sql
+npx supabase db query --linked --file supabase/migrations/013_production_opening_stock.sql
+```
+
+For a brand-new project, paste the whole `supabase/schema.sql` into the SQL
+Editor once instead (it already includes all three migrations).
+
+```bash
+npx vercel login
+npx vercel link
+npx vercel env add VITE_SUPABASE_URL production
+npx vercel env add VITE_SUPABASE_ANON_KEY production
+npx vercel --prod
+```
 ## Build
 
 ```bash
