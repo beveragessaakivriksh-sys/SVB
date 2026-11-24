@@ -10,7 +10,7 @@ import { todayISO } from "@/lib/constants";
 import { itemBottles, itemAmount, computeBillTotals, getProductPrice, buildItemsFromProductList, sortCustomersAlpha } from "@/lib/billUtils";
 import { useProducts } from "@/lib/useProducts";
 import { nextInvoiceNumber, nextDistributorInvoiceNumber } from "@/lib/invoiceSeries";
-import { isDistributorParty, partyDisplayName, partyName, resolveParty, sortPartiesAlpha } from "@/lib/partyUtils";
+import { distributorNameOf, isDistributorParty, partyDisplayName, partyName, resolveParty, sortPartiesAlpha, withDistributorLabel } from "@/lib/partyUtils";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
 import { buildOrdersSummaryPdf, printPdfDirect } from "@/lib/summaryPdf";
 import { findOrderBill, deleteOrderCascade } from "@/lib/deleteOrder";
@@ -54,6 +54,13 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
     }
     return list;
   }, [orders, isDistributorSection, readOnly, user?.role, user?.distributor_id, distributorHotelsById]);
+
+  // Orders that already share a bill (distributor hotels combined per date).
+  const combinedCounts = useMemo(() => {
+    const counts = {};
+    sectionOrders.forEach((o) => { if (o.bill_id) counts[o.bill_id] = (counts[o.bill_id] || 0) + 1; });
+    return counts;
+  }, [sectionOrders]);
 
   const partySelected = filterCustomer !== "all";
   const filtered = useMemo(() => {
@@ -202,14 +209,15 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
     }
   };
 
+  // Distributor hotel orders are consolidated: all hotels of the same
+  // distributor dispatched on the same date share ONE bill in Bill Entries.
+  // Every hotel order keeps its own delivery but points at that single bill.
   const dispatch = async (o) => {
     if (o.dispatch_status === "dispatched") {
       // unmark
       const distributorOrder = isDistributorParty(o);
       // Legacy GST customer invoices were created at incoming time, so
       // un-dispatching only clears the dispatch flag and keeps the bill.
-      // Distributor invoices are always created at dispatch time, so they
-      // are deleted here (and recreated with the same number on re-dispatch).
       if (o.has_gst && o.bill_id && !distributorOrder) {
         const bill = bills.find((b) => b.id === o.bill_id);
         if (bill?.delivery_status === "delivered") return toast({ variant: "destructive", title: "Cannot unmark — bill already delivered" });
@@ -221,11 +229,41 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
         return;
       }
       if (o.bill_id) {
-        const bill = bills.find((b) => b.id === o.bill_id);
+        // Read fresh rows: this order may belong to a combined bill shared by
+        // several hotel orders dispatched one after another.
+        const [freshBills, freshOrders] = await Promise.all([
+          db.entities.Bill.list("-invoice_date", 1000),
+          db.entities.Order.list("-order_date", 1000),
+        ]);
+        const bill = freshBills.find((b) => b.id === o.bill_id);
         if (bill?.delivery_status === "delivered") return toast({ variant: "destructive", title: "Cannot unmark — bill already delivered" });
+        const others = freshOrders.filter((x) => x.id !== o.id && x.bill_id === o.bill_id && x.dispatch_status === "dispatched");
+
+        if (distributorOrder && bill && others.length > 0) {
+          // Keep the combined bill and remove only this hotel's line items.
+          const remaining = (bill.items || []).filter((it) => it.order_id !== o.id);
+          const totals = computeBillTotals(remaining, !!bill.has_gst);
+          await db.entities.Bill.update(bill.id, {
+            items: remaining,
+            subtotal: totals.subtotal,
+            tax_total: totals.tax,
+            total: totals.total,
+            modified_by_name: user?.email || "unknown",
+          });
+          const mineDeliveries = deliveries.filter(
+            (d) => d.bill_id === bill.id && (d.order_id === o.id || (!d.order_id && d.distributor_hotel_id === o.distributor_hotel_id))
+          );
+          for (const d of mineDeliveries) await db.entities.Delivery.delete(d.id).catch(() => {});
+          await db.entities.Order.update(o.id, { dispatch_status: "pending", dispatched_date: null, bill_id: null });
+          setSelected({ ...o, dispatch_status: "pending", dispatched_date: null, bill_id: null });
+          toast({ title: "Removed from combined bill", description: `${others.length} order(s) still linked to ${bill.invoice_number}` });
+          load();
+          return;
+        }
+
         await db.entities.Bill.delete(o.bill_id).catch(() => {});
-        const dl = deliveries.find((d) => d.bill_id === o.bill_id);
-        if (dl) await db.entities.Delivery.delete(dl.id).catch(() => {});
+        const allDeliveries = await db.entities.Delivery.list("-delivery_date", 1000);
+        for (const d of allDeliveries.filter((x) => x.bill_id === o.bill_id)) await db.entities.Delivery.delete(d.id).catch(() => {});
       }
       await db.entities.Order.update(o.id, { dispatch_status: "pending", dispatched_date: null, bill_id: null });
       setSelected({ ...o, dispatch_status: "pending", dispatched_date: null, bill_id: null });
@@ -245,70 +283,114 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
         load();
         return;
       }
-      // Customer orders use the normal GST / Non-GST series; distributor
-      // orders use the dedicated Distributors Invoice Number series.
       const distributorOrder = isDistributorParty(o);
       const party = partyOf(o);
       // Resolve the parent distributor even when the order is for one of its
       // hotels — the per-distributor invoice series lives on the distributor.
       const orderDistributor = distributorsById[o.distributor_id] || distributorsById[distributorHotelsById[o.distributor_hotel_id]?.distributor_id];
+      const distributorLabel = orderDistributor?.display_name || orderDistributor?.distributor_name || "";
+      const partyTitle = withDistributorLabel(o.customer_name || partyName(party), distributorLabel);
+      const rateOf = (it) => Number(it.rate) || getProductPrice(party, it.category, it.flavour);
+      // order_id tags let a combined bill be split again on un-dispatch.
+      const items = (o.items || []).map((it) => ({
+        ...it,
+        order_id: o.id,
+        order_label: partyTitle,
+        rate: rateOf(it),
+        amount: itemAmount({ ...it, rate: rateOf(it) }),
+      }));
+      const orderTotals = computeBillTotals(items, o.has_gst);
+
+      // Find the day's existing combined bill for this distributor (fresh from
+      // the DB so selecting several orders in a row keeps combining them).
+      const freshBills = await db.entities.Bill.list("-invoice_date", 1000);
+      let bill = distributorOrder && orderDistributor
+        ? freshBills.find(
+            (b) => b.party_type === "distributor" && b.distributor_id === orderDistributor.id &&
+                   b.invoice_date === date && b.delivery_status !== "delivered"
+          )
+        : null;
       let invoiceNo = o.invoice_number;
       let seriesName = o.invoice_series;
-      if (!invoiceNo) {
-        const next = distributorOrder ? await nextDistributorInvoiceNumber(orderDistributor) : await nextInvoiceNumber(o.has_gst);
-        invoiceNo = next.number;
-        seriesName = next.seriesName;
+      let billTotals = orderTotals;
+
+      if (bill) {
+        // Append this hotel's items to the one distributor bill.
+        invoiceNo = bill.invoice_number;
+        seriesName = bill.invoice_series;
+        const hasGst = !!bill.has_gst || !!o.has_gst;
+        const allItems = [...(bill.items || []), ...items];
+        billTotals = computeBillTotals(allItems, hasGst);
+        const hotels = [...new Set(allItems.map((it) => it.order_label).filter(Boolean))];
+        bill = await db.entities.Bill.update(bill.id, {
+          items: allItems,
+          has_gst: hasGst,
+          subtotal: billTotals.subtotal,
+          tax_total: billTotals.tax,
+          total: billTotals.total,
+          customer_name: withDistributorLabel(hotels.join(", "), distributorLabel),
+          distributor_hotel_id: null,
+          modified_by_name: user?.email || "unknown",
+        });
+      } else {
+        // Customer orders and the first distributor order of the day get a
+        // new bill. Distributor orders take the dedicated per-distributor
+        // invoice number; customer orders use the GST / Non-GST series.
+        if (!invoiceNo) {
+          const next = distributorOrder ? await nextDistributorInvoiceNumber(orderDistributor) : await nextInvoiceNumber(o.has_gst);
+          invoiceNo = next.number;
+          seriesName = next.seriesName;
+        }
+        const billData = {
+          has_gst: o.has_gst,
+          invoice_number: invoiceNo,
+          invoice_series: seriesName,
+          invoice_date: date,
+          due_date: date,
+          customer_id: distributorOrder ? null : o.customer_id,
+          distributor_id: distributorOrder ? (o.distributor_id || orderDistributor?.id || null) : null,
+          // A combined bill can cover several hotels, so it belongs to the
+          // distributor rather than to one hotel.
+          distributor_hotel_id: null,
+          party_type: distributorOrder ? "distributor" : "customer",
+          customer_name: partyTitle,
+          place_of_supply: party?.place_of_supply,
+          place_of_supply_state_code: party?.place_of_supply_state_code,
+          gst_treatment: party?.gst_treatment,
+          gstin: party?.gstin,
+          billing_attention: party?.billing_attention,
+          billing_address: party?.billing_address,
+          billing_street2: party?.billing_street2,
+          billing_city: party?.billing_city,
+          billing_state: party?.billing_state,
+          billing_country: party?.billing_country,
+          billing_code: party?.billing_code,
+          shipping_attention: party?.shipping_attention,
+          shipping_address: party?.shipping_address,
+          shipping_street2: party?.shipping_street2,
+          shipping_city: party?.shipping_city,
+          shipping_state: party?.shipping_state,
+          shipping_country: party?.shipping_country,
+          shipping_code: party?.shipping_code,
+          payment_terms_label: party?.payment_terms_label || "Due on Receipt",
+          items,
+          subtotal: orderTotals.subtotal,
+          tax_total: orderTotals.tax,
+          total: orderTotals.total,
+          returned_crates: 0,
+          damaged_bottles: 0,
+          payment_status: "pending",
+          paid_amount: 0,
+          dispatch_status: "dispatched",
+          dispatch_date: date,
+          delivery_status: "pending",
+          created_by_name: o.created_by_name,
+          modified_by_name: user?.email || "unknown",
+        };
+        bill = await db.entities.Bill.create(billData);
       }
-      const rateOf = (it) => Number(it.rate) || getProductPrice(party, it.category, it.flavour);
-      const items = (o.items || []).map((it) => ({ ...it, rate: rateOf(it), amount: itemAmount({ ...it, rate: rateOf(it) }) }));
-      const totals = computeBillTotals(items, o.has_gst);
-      const partyTitle = o.customer_name || partyName(party);
-      const billData = {
-        has_gst: o.has_gst,
-        invoice_number: invoiceNo,
-        invoice_series: seriesName,
-        invoice_date: date,
-        due_date: date,
-        customer_id: distributorOrder ? null : o.customer_id,
-        distributor_id: distributorOrder ? o.distributor_id : null,
-        distributor_hotel_id: distributorOrder ? o.distributor_hotel_id : null,
-        party_type: distributorOrder ? "distributor" : "customer",
-        customer_name: partyTitle,
-        place_of_supply: party?.place_of_supply,
-        place_of_supply_state_code: party?.place_of_supply_state_code,
-        gst_treatment: party?.gst_treatment,
-        gstin: party?.gstin,
-        billing_attention: party?.billing_attention,
-        billing_address: party?.billing_address,
-        billing_street2: party?.billing_street2,
-        billing_city: party?.billing_city,
-        billing_state: party?.billing_state,
-        billing_country: party?.billing_country,
-        billing_code: party?.billing_code,
-        shipping_attention: party?.shipping_attention,
-        shipping_address: party?.shipping_address,
-        shipping_street2: party?.shipping_street2,
-        shipping_city: party?.shipping_city,
-        shipping_state: party?.shipping_state,
-        shipping_country: party?.shipping_country,
-        shipping_code: party?.shipping_code,
-        payment_terms_label: party?.payment_terms_label || "Due on Receipt",
-        items,
-        subtotal: totals.subtotal,
-        tax_total: totals.tax,
-        total: totals.total,
-        returned_crates: 0,
-        damaged_bottles: 0,
-        payment_status: "pending",
-        paid_amount: 0,
-        dispatch_status: "dispatched",
-        dispatch_date: date,
-        delivery_status: "pending",
-        created_by_name: o.created_by_name,
-        modified_by_name: user?.email || "unknown",
-      };
-      const bill = await db.entities.Bill.create(billData);
-      // Honour the delivery date chosen in the Distributor Incoming Orders tab.
+
+      // One delivery per hotel order, all pointing at the same combined bill.
       const deliveryDate = o.delivery_date || date;
       const delivery = await db.entities.Delivery.create({
         customer_id: distributorOrder ? null : o.customer_id,
@@ -319,21 +401,36 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
         delivery_date: deliveryDate,
         payment_status: "pending",
         items,
+        order_id: o.id,
         returned_crates: 0,
         damaged_bottles: 0,
         total_bottles: items.reduce((s, it) => s + itemBottles(it), 0),
-        total_amount: totals.total,
+        total_amount: orderTotals.total,
         bill_id: bill.id,
       });
       await db.entities.Order.update(o.id, { dispatch_status: "dispatched", dispatched_date: date, bill_id: bill.id, invoice_number: invoiceNo, invoice_series: seriesName });
       setSelected({ ...o, dispatch_status: "dispatched", dispatched_date: date, bill_id: bill.id, delivery_id: delivery.id, invoice_number: invoiceNo, invoice_series: seriesName });
-      toast({ title: "Dispatched", description: `Invoice ${invoiceNo} created in Bill Entries` });
+      toast({
+        title: "Dispatched",
+        description: distributorOrder
+          ? `Added to combined distributor invoice ${invoiceNo} in Bill Entries`
+          : `Invoice ${invoiceNo} created in Bill Entries`,
+      });
       load();
     } catch (e) {
       toast({ variant: "destructive", title: "Error", description: e.message });
     } finally {
       setBusy(false);
     }
+  };
+
+  // Dispatch every selected pending order in one go — distributor orders of
+  // the same date automatically merge into a single Bill Entries invoice.
+  const dispatchSelectedTogether = async () => {
+    const pending = summaryOrders.filter((x) => x.dispatch_status !== "dispatched");
+    if (pending.length === 0) return toast({ variant: "destructive", title: "Select pending orders to dispatch" });
+    if (!confirm(`Dispatch ${pending.length} order(s)? Distributor orders for the same date will be combined into one bill.`)) return;
+    for (const order of pending) await dispatch(order);
   };
 
   const openModify = (o) => {
@@ -476,6 +573,9 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
           </div>
           <div className="flex flex-wrap gap-2">
             {!readOnly && <Button variant="outline" disabled={busy} onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today</Button>}
+            {!readOnly && isDistributorSection && (
+              <Button variant="outline" disabled={busy} onClick={dispatchSelectedTogether}><Truck className="h-4 w-4 mr-2" /> Dispatch Selected Together</Button>
+            )}
             <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
             <Button onClick={openSummary}><ListChecks className="h-4 w-4 mr-2" /> Summary</Button>
           </div>
@@ -525,6 +625,11 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
                 <td className="p-3">
                   {o.display_name || o.customer_name}
                   {isDistributorParty(o) && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Distributor</span>}
+                  {combinedCounts[o.bill_id] > 1 && (
+                    <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800" title={`Combined with ${combinedCounts[o.bill_id] - 1} other order(s) into one bill`}>
+                      Combined · {o.invoice_number}
+                    </span>
+                  )}
                 </td>
                 <td className="p-3"><span className={o.has_gst ? "text-primary" : "text-muted-foreground"}>{o.has_gst ? "GST" : "Non-GST"}</span></td>
                 <td className="p-3 text-right">{o.total_bottles || 0}</td>
@@ -550,7 +655,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
               <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
                 <div><span className="text-muted-foreground">Order Date</span><div className="font-medium">{selected.order_date}</div></div>
                 {isDistributorSection && <div><span className="text-muted-foreground">Delivery Date</span><div className="font-medium">{selected.delivery_date || "—"}</div></div>}
-                <div><span className="text-muted-foreground">Party</span><div className="font-medium">{isDistributorParty(selected) ? "Distributor" : "Customer"}</div></div>
+                <div><span className="text-muted-foreground">Party</span><div className="font-medium">{isDistributorParty(selected) ? `Distributor — ${distributorNameOf(selected, distributorsById, distributorHotelsById) || "unknown"}` : "Customer"}</div></div>
                 <div><span className="text-muted-foreground">Type</span><div className="font-medium">{selected.has_gst ? "GST" : "Non-GST"}</div></div>
                 <div><span className="text-muted-foreground">Total Bottles</span><div className="font-medium">{selected.total_bottles || 0}</div></div>
               </div>

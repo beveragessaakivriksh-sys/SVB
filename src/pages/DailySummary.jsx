@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import PageShell from "@/components/PageShell";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
+import { distributorNameOf, withDistributorLabel } from "@/lib/partyUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,6 +21,8 @@ export default function DailySummaryPage() {
   const [mine, setMine] = useState([]);
   const [bills, setBills] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [distributors, setDistributors] = useState([]);
+  const [distributorHotels, setDistributorHotels] = useState([]);
   const [summaries, setSummaries] = useState([]);
   const [saving, setSaving] = useState(false);
 
@@ -30,12 +33,25 @@ export default function DailySummaryPage() {
   const load = async () => {
     setMine(await db.entities.DailySummary.filter({ summary_date: todayISO() }, "-summary_date", 50));
     setBills(await db.entities.Bill.list("-invoice_date", 500));
-    setCustomers(await db.entities.Customer.list());
+    const [customerList, distributorList, hotelList] = await Promise.all([
+      db.entities.Customer.list(),
+      db.entities.Distributor.list(),
+      db.entities.DistributorHotel.list(),
+    ]);
+    setCustomers(customerList);
+    setDistributors(distributorList);
+    setDistributorHotels(hotelList);
     setSummaries(await db.entities.DailySummary.list("-summary_date", 500));
   };
   useEffect(() => { load(); }, []);
 
   const customersById = useMemo(() => Object.fromEntries(customers.map((c) => [c.id, c])), [customers]);
+  const distributorsById = useMemo(() => Object.fromEntries(distributors.map((d) => [d.id, d])), [distributors]);
+  const distributorHotelsById = useMemo(() => Object.fromEntries(distributorHotels.map((h) => [h.id, h])), [distributorHotels]);
+  const entryLabel = (b) => withDistributorLabel(
+    b.customer_name || customersById[b.customer_id]?.customer_name,
+    distributorNameOf(b, distributorsById, distributorHotelsById)
+  );
 
   const save = async () => {
     setSaving(true);
@@ -71,7 +87,7 @@ export default function DailySummaryPage() {
       if (b.invoice_date !== date) return;
       const u = b.created_by_name || "Unknown";
       byUser[u] = byUser[u] || { user: u, hotels: {} };
-      const hotel = b.customer_name || customersById[b.customer_id]?.customer_name || "Unknown";
+      const hotel = entryLabel(b) || "Unknown";
       byUser[u].hotels[hotel] = byUser[u].hotels[hotel] || { emptyCrates: 0, paymentStatus: "pending", mode: null, partial: 0, deliveredAt: null };
       byUser[u].hotels[hotel].emptyCrates += Number(b.returned_crates) || 0;
       if (b.payment_status === "completed") byUser[u].hotels[hotel].paymentStatus = "completed";
@@ -92,7 +108,7 @@ export default function DailySummaryPage() {
         totalPartial: hotelList.reduce((s, h) => s + (h.partial || 0), 0),
       };
     });
-  }, [bills, customersById, summaries, date]);
+  }, [bills, customersById, distributorsById, distributorHotelsById, summaries, date]);
 
   const downloadReport = async () => {
     const { jsPDF } = await import("jspdf");
@@ -107,11 +123,11 @@ export default function DailySummaryPage() {
       pdf.text(`User: ${u.user}`, 14, y); y += 6;
       pdf.setFontSize(8);
       pdf.text(`Factory leaving: ${u.morning_start_time}   Factory return: ${u.evening_end_time}   Kms: ${u.total_kms}`, 14, y); y += 5;
-      pdf.text("Hotel", 14, y); pdf.text("Empty Crates", 70, y); pdf.text("Payment", 100, y); pdf.text("Mode", 125, y); pdf.text("Amount", 150, y); pdf.text("Delivery time", 170, y);
+      pdf.text("Hotel / Distributor", 14, y); pdf.text("Empty Crates", 70, y); pdf.text("Payment", 100, y); pdf.text("Mode", 125, y); pdf.text("Amount", 150, y); pdf.text("Delivery time", 170, y);
       y += 4; pdf.line(14, y, 196, y); y += 3;
       Object.entries(u.hotels).forEach(([hotel, h]) => {
         if (y > 285) { pdf.addPage(); y = 16; }
-        pdf.text(String(hotel).slice(0, 20), 14, y);
+        pdf.text(String(hotel).slice(0, 32), 14, y);
         pdf.text(String(h.emptyCrates), 70, y);
         pdf.text(h.paymentStatus, 100, y);
         pdf.text(h.mode || "-", 125, y);
@@ -166,7 +182,7 @@ export default function DailySummaryPage() {
                   <div className="text-sm font-semibold">{u.user}</div>
                   <div className="text-[11px] text-muted-foreground">Leave {u.morning_start_time} · Return {u.evening_end_time} · Kms {u.total_kms}</div>
                   <table className="mt-2 w-full text-xs">
-                    <thead className="text-muted-foreground"><tr><th className="p-1 text-left">Hotel</th><th className="p-1">Crates</th><th className="p-1">Pay</th><th className="p-1">Mode</th><th className="p-1">Partial</th></tr></thead>
+                    <thead className="text-muted-foreground"><tr><th className="p-1 text-left">Hotel / Distributor</th><th className="p-1">Crates</th><th className="p-1">Pay</th><th className="p-1">Mode</th><th className="p-1">Partial</th></tr></thead>
                     <tbody>
                       {Object.entries(u.hotels).map(([hotel, h]) => (
                         <tr key={hotel} className="border-t border-primary/10">

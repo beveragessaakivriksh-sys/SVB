@@ -340,7 +340,7 @@ export function buildOrdersSummaryPdf(pdf, { title, categories, flavoursByCatego
 
     y = renderGridTable(pdf, {
       title: cat,
-      lead: [{ header: "Hotel" }, { header: "MRP" }],
+      lead: [{ header: "Hotel / Distributor" }, { header: "MRP" }],
       cols: flavs.map((fl) => ({ header: fl, subs: ["Cr", "Lo"] })),
       total: { header: "Total", subs: ["Cr", "Lo"] },
       rows,

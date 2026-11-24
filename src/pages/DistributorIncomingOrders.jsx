@@ -8,7 +8,7 @@ import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO } from "@/lib/constants";
 import { buildItemsFromProductList, computeBillTotals, getProductPrice, itemBottles, itemAmount } from "@/lib/billUtils";
 import { nextInternalNumber } from "@/lib/invoiceSeries";
-import { partyDisplayName, partyName, sortPartiesAlpha } from "@/lib/partyUtils";
+import { partyDisplayName, partyName, sortPartiesAlpha, withDistributorLabel } from "@/lib/partyUtils";
 import { useProducts } from "@/lib/useProducts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -106,13 +106,17 @@ export default function DistributorIncomingOrders() {
       }));
       const totalBottles = itemsWithAmount.reduce((s, it) => s + itemBottles(it), 0);
 
+      // Carry the distributor name in the entry labels so it appears in
+      // Orders, Bill Entries, daily summaries and the A4 printouts.
+      const distributorLabel = distributor.display_name || distributor.distributor_name || "";
+      const hotelName = partyName(hotel);
       await db.entities.Order.create({
         customer_id: null,
         distributor_id: distributor.id,
         distributor_hotel_id: hotel.id,
         party_type: "distributor",
-        customer_name: partyName(hotel),
-        display_name: hotel.display_name || partyName(hotel),
+        customer_name: withDistributorLabel(hotelName, distributorLabel),
+        display_name: withDistributorLabel(hotel.display_name || hotelName, distributorLabel),
         has_gst: hotel.has_gst,
         internal_invoice_number: internalNumber,
         invoice_number: null,

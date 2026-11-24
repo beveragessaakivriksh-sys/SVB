@@ -5,7 +5,7 @@ import PageShell from "@/components/PageShell";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { todayISO, bottlesPerCrate, PAYMENT_MODES } from "@/lib/constants";
 import { itemBottles, balanceDue, sortCustomersAlpha } from "@/lib/billUtils";
-import { isDistributorParty, partyDisplayName, resolveParty, sortPartiesAlpha } from "@/lib/partyUtils";
+import { distributorNameOf, isDistributorParty, partyDisplayName, resolveParty, sortPartiesAlpha, withDistributorLabel } from "@/lib/partyUtils";
 import { printInvoiceA4, downloadInvoicePdf } from "@/lib/printUtils";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import ThermalPreview from "@/components/ThermalPreview";
@@ -85,6 +85,9 @@ export default function BillEntries() {
   const distributorsById = useMemo(() => Object.fromEntries(distributors.map((d) => [d.id, d])), [distributors]);
   const distributorHotelsById = useMemo(() => Object.fromEntries(distributorHotels.map((h) => [h.id, h])), [distributorHotels]);
   const partyOf = (bill) => resolveParty(bill, customersById, distributorsById, distributorHotelsById);
+  // Show "Hotel (Distributor)" for every entry, including older bills saved
+  // before the distributor label was included in customer_name.
+  const entryLabel = (rec) => withDistributorLabel(rec?.customer_name || rec?.display_name, distributorNameOf(rec, distributorsById, distributorHotelsById));
 
   const partyOptions = useMemo(() => {
     const customerOptions = sortCustomersAlpha(customers).map((c) => ({ ...c, title: c.display_name || c.customer_name }));
@@ -157,7 +160,7 @@ export default function BillEntries() {
       if (y > 285) { pdf.addPage(); y = 20; }
       pdf.text(String(b.invoice_number).slice(0, 14), 14, y);
       pdf.text(String(b.invoice_date), 44, y);
-      pdf.text(String(b.customer_name || "").slice(0, 24), 70, y);
+      pdf.text(entryLabel(b).slice(0, 30), 70, y);
       pdf.text(b.has_gst ? "GST" : "Non-GST", 130, y);
       pdf.text(`Rs. ${(b.total || 0).toFixed(0)}`, 170, y);
       y += 5;
@@ -364,7 +367,7 @@ export default function BillEntries() {
                   <td className="p-3 font-medium text-primary">{b.invoice_number}</td>
                   <td className="p-3">{b.invoice_date}</td>
                   <td className="p-3">
-                    {b.customer_name}
+                    {entryLabel(b)}
                     {isDistributorParty(b) && <span className="ml-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">Distributor</span>}
                   </td>
                   <td className="p-3"><span className={b.has_gst ? "text-primary" : "text-muted-foreground"}>{b.has_gst ? "GST" : "Non-GST"}</span></td>
@@ -395,7 +398,7 @@ export default function BillEntries() {
       {/* Summary + actions modal */}
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
         <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle>{selected?.invoice_number} — {selected?.customer_name}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{selected?.invoice_number} — {selected ? entryLabel(selected) : ""}</DialogTitle></DialogHeader>
           {selected && (
             <div className="max-h-[65vh] space-y-4 overflow-y-auto">
               {pendingForCustomer.length > 0 && (

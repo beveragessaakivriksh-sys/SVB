@@ -8,11 +8,30 @@ import {
   sortPartiesAlpha,
   resolveParty,
   distributorClosingStock,
+  distributorIdOf,
+  distributorNameOf,
+  withDistributorLabel,
 } from "@/lib/partyUtils";
 
 const customer = { id: "c1", customer_name: "Hotel One", display_name: "Hotel One" };
 const distributor = { id: "d1", distributor_name: "Distributor One", display_name: "Dist One" };
 const hotel = { id: "h1", distributor_id: "d1", hotel_name: "Hotel Alpha", display_name: "Hotel Alpha" };
+
+describe("distributor entry labels", () => {
+  it("finds the parent distributor directly or through a hotel", () => {
+    expect(distributorIdOf({ distributor_id: "d1" })).toBe("d1");
+    expect(distributorIdOf({ distributor_hotel_id: "h1" }, {}, { h1: hotel })).toBe("d1");
+  });
+
+  it("adds the distributor name once alongside the hotel name", () => {
+    const byId = { d1: distributor };
+    const byHotel = { h1: hotel };
+    expect(distributorNameOf({ distributor_hotel_id: "h1" }, byId, byHotel)).toBe("Dist One");
+    expect(withDistributorLabel("Hotel Alpha", "Dist One")).toBe("Hotel Alpha (Dist One)");
+    expect(withDistributorLabel("Hotel Alpha (Dist One)", "Dist One")).toBe("Hotel Alpha (Dist One)");
+    expect(withDistributorLabel("Hotel Alpha", "")).toBe("Hotel Alpha");
+  });
+});
 
 describe("distributor party helpers", () => {
   it("detects distributor records by party_type or distributor_id", () => {
