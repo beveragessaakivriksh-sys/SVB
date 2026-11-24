@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGstZohoRows, buildNonGstRows, GST_ZOHO_COLUMNS, NON_GST_COLUMNS, isGstExportBill, isNonGstExportBill } from "../exportUtils";
+import { buildGstZohoRows, buildNonGstRows, buildDistributorNonGstRows, GST_ZOHO_COLUMNS, NON_GST_COLUMNS, isGstExportBill, isNonGstExportBill } from "../exportUtils";
 
 const bill = {
   invoice_number: "INV-1001",
@@ -56,6 +56,44 @@ describe("exportUtils", () => {
     bills.forEach((b) => expect(isGstExportBill(b) && isNonGstExportBill(b)).toBe(false));
     expect(bills.filter(isGstExportBill)).toHaveLength(1);
     expect(bills.filter(isNonGstExportBill)).toHaveLength(3);
+  });
+
+  it("summarises distributor bills by flavour with the distributor in Column D", () => {
+    const d = { id: "d1", distributor_name: "Distributor One", display_name: "Dist One" };
+    const distributorBills = [
+      {
+        invoice_number: "DST-1001", invoice_date: "2026-11-24", has_gst: false,
+        distributor_id: "d1", party_type: "distributor", customer_name: "Hotel A (Dist One)",
+        items: [{ category: "Goli Fizz", flavour: "Orange", crates: 2, loose: 3, rate: 10, amount: 510 }],
+      },
+      {
+        invoice_number: "DST-1001", invoice_date: "2026-11-24", has_gst: false,
+        distributor_id: "d1", party_type: "distributor", customer_name: "Hotel B (Dist One)",
+        items: [{ category: "Goli Fizz", flavour: "Orange", crates: 1, loose: 0, rate: 10, amount: 240 }],
+      },
+    ];
+    const rows = buildDistributorNonGstRows(distributorBills, { d1: d }, {});
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row[NON_GST_COLUMNS.indexOf("Invoice Number")]).toBe("DST-1001");
+    expect(row[NON_GST_COLUMNS.indexOf("Customer Name")]).toBe("Dist One");
+    expect(row[NON_GST_COLUMNS.indexOf("Quantity")]).toBe(2 * 24 + 3 + 24);
+    expect(row[NON_GST_COLUMNS.indexOf("Item Name")]).toBe("Goli Fizz - Orange");
+  });
+
+  it("keeps separate groups for different distributors or dates", () => {
+    const d1 = { id: "d1", distributor_name: "One" };
+    const d2 = { id: "d2", distributor_name: "Two" };
+    const mk = (id, date, invoice) => ({
+      invoice_number: invoice, invoice_date: date, distributor_id: id, party_type: "distributor",
+      items: [{ category: "Goli Fizz", flavour: "Orange", crates: 1, loose: 0, rate: 10, amount: 240 }],
+    });
+    const rows = buildDistributorNonGstRows(
+      [mk("d1", "2026-11-23", "A-1"), mk("d1", "2026-11-24", "A-2"), mk("d2", "2026-11-23", "B-1")],
+      { d1, d2 }, {}
+    );
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => r[NON_GST_COLUMNS.indexOf("Invoice Number")])).toEqual(["A-1", "A-2", "B-1"]);
   });
 
   it("falls back to hotel or distributor names for the bill-to party", () => {

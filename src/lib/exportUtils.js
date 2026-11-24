@@ -1,5 +1,5 @@
 import { SUPPLIER, BANK_NOTES, TERMS_GST, TERMS_NON_GST, CGST_RATE, SGST_RATE, HSN_SAC, bottlesPerCrate } from "./constants";
-import { isDistributorParty } from "./partyUtils";
+import { distributorIdOf, distributorNameOf, isDistributorParty } from "./partyUtils";
 
 const FALSE = "FALSE";
 const NO = "NO";
@@ -184,8 +184,10 @@ export function buildGstZohoRows(bill, customer) {
 // Export split used by the Bill Entries tab:
 //   * GST CSV      -> GST customer bills only (a distributor bill is never a
 //                    GST export bill, even if its hotel is GST-registered).
-//   * Non-GST CSV  -> everything else: plain non-GST customer bills AND all
-//                    distributor bills (GST or non-GST).
+//   * Non-GST CSV  -> plain non-GST customer bills as-is; distributor bills
+//                    are summarised per distributor + date, one row per
+//                    flavour with the total bottles and the DISTRIBUTOR's
+//                    name in Column D (not the individual hotel names).
 // Keeping this in one pure helper means the two downloads are mutually
 // exclusive and no bill is silently dropped or exported twice.
 export function isGstExportBill(bill) {
@@ -201,6 +203,61 @@ export const NON_GST_COLUMNS = [
   "Place of Supply", "Payment Terms Label", "Due Date", "Currency Code", "Item Name",
   "Quantity", "Item Price", "Terms & Conditions",
 ];
+
+// Distributor Non-GST CSV: aggregate every hotel line in the bills of one
+// distributor on one date into a single row per flavour. "Quantity" becomes
+// the total bottles of that flavour, "Item Price" the weighted average, and
+// Column D carries only the distributor's name.
+export function buildDistributorNonGstRows(bills = [], distributorsById = {}, distributorHotelsById = {}) {
+  const groups = new Map();
+
+  bills.filter(isDistributorParty).forEach((bill) => {
+    const distributorId = distributorIdOf(bill, distributorsById, distributorHotelsById) || bill.distributor_id || "unknown";
+    const date = bill.invoice_date || "";
+    const key = `${distributorId}|${date}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        date,
+        bill,
+        invoiceNumber: bill.invoice_number || "",
+        distributorName: distributorNameOf(bill, distributorsById, distributorHotelsById) || bill.customer_name || "",
+        flavours: new Map(),
+      });
+    }
+    const group = groups.get(key);
+
+    (bill.items || []).forEach((item) => {
+      const name = item.label || `${item.category} - ${item.flavour}`;
+      const aggregate = group.flavours.get(name) || { bottles: 0, amount: 0 };
+      aggregate.bottles += itemTotalBottles(item);
+      aggregate.amount += Number(item.amount) || 0;
+      group.flavours.set(name, aggregate);
+    });
+  });
+
+  const rows = [];
+  groups.forEach((group) => {
+    group.flavours.forEach((aggregate, name) => {
+      rows.push([
+        group.invoiceNumber,
+        group.date,
+        "Overdue",
+        group.distributorName,
+        group.bill.gst_treatment || "",
+        group.bill.place_of_supply || "",
+        group.bill.payment_terms_label || "Due on Receipt",
+        group.date,
+        "INR",
+        name,
+        aggregate.bottles,
+        aggregate.bottles ? +((aggregate.amount / aggregate.bottles).toFixed(2)) : 0,
+        TERMS_NON_GST,
+      ]);
+    });
+  });
+  return rows;
+}
 
 export function buildNonGstRows(bill, customer) {
   const rows = [];

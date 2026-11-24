@@ -11,7 +11,7 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import ThermalPreview from "@/components/ThermalPreview";
 import BillSummary from "@/components/BillSummary";
 import { cloneToTodayOrder } from "@/lib/cloneOrder";
-import { downloadCsv, buildGstZohoRows, GST_ZOHO_COLUMNS, buildNonGstRows, NON_GST_COLUMNS, isGstExportBill, isNonGstExportBill } from "@/lib/exportUtils";
+import { downloadCsv, buildGstZohoRows, GST_ZOHO_COLUMNS, buildNonGstRows, buildDistributorNonGstRows, NON_GST_COLUMNS, isGstExportBill, isNonGstExportBill } from "@/lib/exportUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -140,9 +140,16 @@ export default function BillEntries() {
   };
 
   const exportNonGst = () => {
-    // Non-GST CSV: ordinary non-GST bills plus ALL distributor bills.
+    // Ordinary non-GST bills are exported as-is. Distributor bills are
+    // summarised per distributor + date: one row per flavour, Quantity = total
+    // bottles of that flavour, and Column D = the distributor's name only.
     const ngBills = filtered.filter(isNonGstExportBill);
-    const rows = ngBills.flatMap((b) => buildNonGstRows(b, partyOf(b)));
+    const distributorBills = ngBills.filter(isDistributorParty);
+    const customerBills = ngBills.filter((b) => !isDistributorParty(b));
+    const rows = [
+      ...customerBills.flatMap((b) => buildNonGstRows(b, partyOf(b))),
+      ...buildDistributorNonGstRows(distributorBills, distributorsById, distributorHotelsById),
+    ];
     if (!rows.length) return toast({ variant: "destructive", title: "No non-GST or distributor bills in range" });
     downloadCsv(NON_GST_COLUMNS, rows, `nongst_bills_${from}_to_${to}.csv`);
   };
