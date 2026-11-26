@@ -27,9 +27,12 @@ import { useToast } from "@/components/ui/use-toast";
 function OrderSection({ kind, orders, bills, deliveries, customersById, distributorsById, distributorHotelsById, partyOptions, load, categories, flavoursByCategory, productList, readOnly = false }) {
   const user = useCurrentUser();
   const { toast } = useToast();
+  const isPendingSection = kind === "pending";
   const [specificDate, setSpecificDate] = useState("");
-  const [from, setFrom] = useState(todayISO());
-  const [to, setTo] = useState(todayISO());
+  // Pending section starts with no date filter so it really shows ALL pending
+  // orders, including older ones.
+  const [from, setFrom] = useState(isPendingSection ? "" : todayISO());
+  const [to, setTo] = useState(isPendingSection ? "" : todayISO());
   const [filterCustomer, setFilterCustomer] = useState("all");
   const [selected, setSelected] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -42,10 +45,15 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
   const summaryRef = useRef(null);
 
   const isDistributorSection = kind === "distributor";
+  const sectionLabel = isPendingSection ? "Pending" : isDistributorSection ? "Distributor" : "Customer";
   const partyOf = (order) => resolveParty(order, customersById, distributorsById, distributorHotelsById);
 
   const sectionOrders = useMemo(() => {
-    let list = orders.filter((o) => isDistributorParty(o) === isDistributorSection);
+    // Pending section mixes customer + distributor orders that are not yet
+    // dispatched. The other two sections keep their party split.
+    let list = isPendingSection
+      ? orders.filter((o) => o.dispatch_status !== "dispatched")
+      : orders.filter((o) => isDistributorParty(o) === isDistributorSection);
     // A distributor account may only view its own orders — read-only.
     if (readOnly && user?.role === "distributor" && user?.distributor_id) {
       list = list.filter(
@@ -53,7 +61,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
       );
     }
     return list;
-  }, [orders, isDistributorSection, readOnly, user?.role, user?.distributor_id, distributorHotelsById]);
+  }, [orders, isPendingSection, isDistributorSection, readOnly, user?.role, user?.distributor_id, distributorHotelsById]);
 
   // Orders that already share a bill (distributor hotels combined per date).
   const combinedCounts = useMemo(() => {
@@ -68,7 +76,9 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
       // A party picked from the dropdown shows ALL of its orders, every date.
       if (partySelected) return o.customer_id === filterCustomer || o.distributor_id === filterCustomer || o.distributor_hotel_id === filterCustomer;
       if (specificDate) return o.order_date === specificDate;
-      return o.order_date >= from && o.order_date <= to;
+      // Empty From/To (default in the Pending section) means all dates.
+      if (from && to && (o.order_date < from || o.order_date > to)) return false;
+      return true;
     });
     // Newest first — today at the top, then going back in time.
     return [...list].sort(
@@ -160,7 +170,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
       // the selected rows/columns overflow — nothing is squeezed.
       const pdf = new jsPDF("l", "mm", "a4");
       buildOrdersSummaryPdf(pdf, {
-        title: `${isDistributorSection ? "Distributor" : "Customer"} Order Summary — ${todayISO()}`,
+        title: `${sectionLabel} Order Summary — ${todayISO()}`,
         categories,
         flavoursByCategory,
         groupedSummary,
@@ -172,7 +182,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
         toast({ title: "Opening print dialog (A4 landscape)" });
         return;
       }
-      pdf.save(`${isDistributorSection ? "distributor" : "customer"}_orders_summary_${todayISO()}.pdf`);
+      pdf.save(`${sectionLabel.toLowerCase()}_orders_summary_${todayISO()}.pdf`);
       toast({ title: "Summary saved as PDF", description: "A4 landscape · 1.5× print size" });
     } catch (e) {
       toast({ variant: "destructive", title: "Could not save PDF", description: e.message });
@@ -540,8 +550,8 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
     const pdf = new jsPDF("p", "mm", "a4");
     pdf.setFontSize(14);
     const pdfParty = customersById[filterCustomer] || distributorsById[filterCustomer] || distributorHotelsById[filterCustomer];
-    const pdfRange = partySelected ? `${partyDisplayName(pdfParty) || "Party"} — all dates` : (specificDate || `${from} to ${to}`);
-    pdf.text(`${isDistributorSection ? "Distributor" : "Customer"} Orders: ${pdfRange}`, 14, 18);
+    const pdfRange = partySelected ? `${partyDisplayName(pdfParty) || "Party"} — all dates` : (specificDate || (from && to ? `${from} to ${to}` : "all dates"));
+    pdf.text(`${sectionLabel} Orders: ${pdfRange}`, 14, 18);
     pdf.setFontSize(9);
     let y = 28;
     pdf.text("Internal #", 14, y); pdf.text("Date", 50, y); pdf.text("Party", 80, y); pdf.text("Status", 140, y); pdf.text("Bottles", 170, y);
@@ -555,7 +565,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
       pdf.text(String(o.total_bottles || 0), 170, y);
       y += 5;
     });
-    pdf.save(`${isDistributorSection ? "distributor" : "customer"}_orders_${specificDate || from}.pdf`);
+    pdf.save(`${sectionLabel.toLowerCase()}_orders_${specificDate || from || "all"}.pdf`);
   };
 
   return (
@@ -563,11 +573,13 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
       <div className="rounded-xl border border-primary/20 bg-white p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-primary">{isDistributorSection ? "Distributor Orders" : "Customer Orders"}</h2>
+            <h2 className="text-base font-semibold text-primary">{isPendingSection ? "Pending Orders" : isDistributorSection ? "Distributor Orders" : "Customer Orders"}</h2>
             <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {isDistributorSection
-                ? "Incoming orders from distributors and their hotels. Each has its own filters and options."
-                : "Incoming orders from customers/hotels. Each has its own filters and options."}
+              {isPendingSection
+                ? "All undispatched customer and distributor orders, across all dates."
+                : isDistributorSection
+                  ? "Incoming orders from distributors and their hotels. Each has its own filters and options."
+                  : "Incoming orders from customers/hotels. Each has its own filters and options."}
               {" "}Showing {filtered.length} of {sectionOrders.length} order(s).
             </p>
           </div>
@@ -575,6 +587,9 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
             {!readOnly && <Button variant="outline" disabled={busy} onClick={cloneSelectedToToday}><Copy className="h-4 w-4 mr-2" /> Clone to Today</Button>}
             {!readOnly && isDistributorSection && (
               <Button variant="outline" disabled={busy} onClick={dispatchSelectedTogether}><Truck className="h-4 w-4 mr-2" /> Dispatch Selected Together</Button>
+            )}
+            {!readOnly && isPendingSection && (
+              <Button variant="outline" disabled={busy} onClick={dispatchSelectedTogether}><Truck className="h-4 w-4 mr-2" /> Dispatch Selected</Button>
             )}
             <Button variant="outline" onClick={exportPdfList}><FileDown className="h-4 w-4 mr-2" /> PDF</Button>
             <Button onClick={openSummary}><ListChecks className="h-4 w-4 mr-2" /> Summary</Button>
@@ -586,14 +601,14 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
           <div><Label>From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} disabled={!!specificDate || partySelected} /></div>
           <div><Label>To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} disabled={!!specificDate || partySelected} /></div>
           <div>
-            <Label>{isDistributorSection ? "Distributor / Hotel" : "Customer"}</Label>
+            <Label>{isPendingSection ? "Customer / Distributor" : isDistributorSection ? "Distributor / Hotel" : "Customer"}</Label>
             <HotelCombobox
               customers={partyOptions}
               value={filterCustomer}
               onChange={setFilterCustomer}
-              allLabel={isDistributorSection ? "All distributors & hotels" : "All customers"}
+              allLabel={isPendingSection ? "All customers & distributors" : isDistributorSection ? "All distributors & hotels" : "All customers"}
             />
-            {partySelected && <p className="mt-1 text-[11px] text-muted-foreground">Showing all dates. Choose “{isDistributorSection ? "All distributors & hotels" : "All customers"}” to filter by date.</p>}
+            {partySelected && <p className="mt-1 text-[11px] text-muted-foreground">Showing all dates. Choose “{isPendingSection ? "All customers & distributors" : isDistributorSection ? "All distributors & hotels" : "All customers"}” to filter by date.</p>}
           </div>
         </div>
       </div>
@@ -606,7 +621,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
               <th className="p-3">Internal #</th>
               <th className="p-3">Date</th>
               {isDistributorSection && <th className="p-3">Delivery Date</th>}
-              <th className="p-3">{isDistributorSection ? "Distributor / Hotel" : "Customer"}</th>
+              <th className="p-3">{isPendingSection ? "Customer / Distributor" : isDistributorSection ? "Distributor / Hotel" : "Customer"}</th>
               <th className="p-3">Type</th>
               <th className="p-3 text-right">Bottles</th>
               <th className="p-3">Status</th>
@@ -779,7 +794,7 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
           <DialogHeader>
             <div className="flex flex-wrap items-start justify-between gap-2 pr-8">
               <div>
-                <DialogTitle>{isDistributorSection ? "Distributor" : "Customer"} Order Summary — by party &amp; flavour</DialogTitle>
+                <DialogTitle>{sectionLabel} Order Summary — by party &amp; flavour</DialogTitle>
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   Print layout: A4 landscape, everything at 1.5× — one page where it fits, otherwise it flows onto a second page.
                 </p>
@@ -893,6 +908,68 @@ function OrderSection({ kind, orders, bills, deliveries, customersById, distribu
   );
 }
 
+// Read-only, unfiltered list of every order that has not been dispatched yet.
+// Sits between Customer Orders and Distributor Orders — no filters, no sorting
+// controls, no selection, no actions.
+function PendingOrders({ orders, customersById, distributorsById, distributorHotelsById }) {
+  const pending = useMemo(
+    () => orders
+      .filter((o) => o.dispatch_status !== "dispatched")
+      .sort((a, b) => (b.order_date || "").localeCompare(a.order_date || "") || (b.created_at || "").localeCompare(a.created_at || "")),
+    [orders]
+  );
+
+  const labelOf = (o) => {
+    const party = resolveParty(o, customersById, distributorsById, distributorHotelsById);
+    return withDistributorLabel(
+      o.display_name || o.customer_name || partyDisplayName(party),
+      distributorNameOf(o, distributorsById, distributorHotelsById)
+    );
+  };
+
+  return (
+    <div className="rounded-xl border border-primary/20 bg-white p-4">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-base font-semibold text-primary">Pending Orders</h2>
+        <span className="text-[11px] text-muted-foreground">{pending.length} pending order(s)</span>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-primary/10">
+        <table className="w-full text-sm">
+          <thead className="bg-primary/5 text-left text-xs text-muted-foreground">
+            <tr>
+              <th className="p-3">Internal #</th>
+              <th className="p-3">Order Date</th>
+              <th className="p-3">Delivery Date</th>
+              <th className="p-3">Customer / Distributor</th>
+              <th className="p-3 text-right">Bottles</th>
+              <th className="p-3">Party</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pending.map((o) => (
+              <tr key={o.id} className="border-t border-primary/15">
+                <td className="p-3 font-medium text-primary">{o.internal_invoice_number}</td>
+                <td className="p-3">{o.order_date}</td>
+                <td className="p-3">{o.delivery_date || "—"}</td>
+                <td className="p-3">{labelOf(o)}</td>
+                <td className="p-3 text-right">{o.total_bottles || 0}</td>
+                <td className="p-3">
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] ${isDistributorParty(o) ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                    {isDistributorParty(o) ? "Distributor" : "Customer"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+            {pending.length === 0 && (
+              <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No pending orders</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function Orders() {
   const { categories, flavoursByCategory, productList } = useProducts();
   const user = useCurrentUser();
@@ -967,10 +1044,17 @@ export default function Orders() {
   return (
     <PageShell
       title="Orders"
-      subtitle={isDistributorUser ? "Your distributor orders (view only)" : "Internal invoices — customer and distributor orders are shown in separate sections"}
+      subtitle={isDistributorUser ? "Your distributor orders (view only)" : "Customer, pending and distributor orders are shown in separate sections"}
     >
       <div className="space-y-10">
-        {!isDistributorUser && <OrderSection kind="customer" partyOptions={customerOptions} {...sectionProps} />}
+        {!isDistributorUser && (
+          <>
+            <OrderSection kind="customer" partyOptions={customerOptions} {...sectionProps} />
+            <div className="border-t border-border pt-8">
+              <PendingOrders orders={orders} customersById={customersById} distributorsById={distributorsById} distributorHotelsById={distributorHotelsById} />
+            </div>
+          </>
+        )}
         <div className={isDistributorUser ? "" : "border-t border-border pt-8"}>
           <OrderSection kind="distributor" partyOptions={distributorOptions} readOnly={isDistributorUser} {...sectionProps} />
         </div>
